@@ -3,6 +3,7 @@
 
 credentials.json
 token.json
+access_tokens.json
 
 __pycache__/
 *.pyc
