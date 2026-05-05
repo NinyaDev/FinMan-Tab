@@ -86,7 +86,7 @@ def exchange_public_token():
         
         # Load existing tokens, add new one and save
         tokens = {}
-        if TOKENS_FILE.exists():
+        if TOKENS_FILE.exists() and TOKENS_FILE.stat().st_size > 0:
             tokens = json.loads(TOKENS_FILE.read_text())
         tokens[nickname] = {"access_token": access_token, "item_id": item_id}
         TOKENS_FILE.write_text(json.dumps(tokens, indent=2))
