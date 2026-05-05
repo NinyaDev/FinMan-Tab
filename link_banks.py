@@ -152,7 +152,7 @@ HTML_PAGE = """<!DOCTYPE html>
               });                                            
               const data = await r.json();                                                                                                    
               if (data.error) throw new Error(data.error);
-              setStatus(`✅ Linked <b>${nickname}</b> successfully. Refresh to link another bank.`, "ok");                                    
+              setStatus(`Linked <b>${nickname}</b> successfully. Refresh to link another bank.`, "ok");                                    
             } catch (e) {                
               setStatus(`Exchange failed: ${e.message}`, "err");                                                                              
             }                                       
