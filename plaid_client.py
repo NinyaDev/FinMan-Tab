@@ -17,7 +17,7 @@ load_dotenv()
 
 log = logging.getLogger(__name__)
 
-PLAID_CLIENt_ID = os.getenv("PLAID_CLIENT_ID")
+PLAID_CLIENT_ID = os.getenv("PLAID_CLIENT_ID")
 PLAID_PRODUCTION_SECRET = os.getenv("PLAID_PRODUCTION_SECRET")
 PLAID_SANDBOX_SECRET = os.getenv("PLAID_SANDBOX_SECRET")
 
@@ -36,14 +36,14 @@ def get_client(env: str="production"):
     else:
         raise ValueError(f"Invalid environment: {env}. Must be 'production' or 'sandbox'.")
     
-    if not PLAID_CLIENt_ID or not secret:
+    if not PLAID_CLIENT_ID or not secret:
         log.error(f"Missing PLAID_CLIENT_ID or {env} secret in .env")
         raise SystemExit(1)
     
     config = Configuration(
         host = host,
         api_key = {
-            "clientId": PLAID_CLIENt_ID, "secret": secret}
+            "clientId": PLAID_CLIENT_ID, "secret": secret}
     )
     return plaid_api.PlaidApi(ApiClient(config))
 
@@ -51,7 +51,14 @@ def get_client(env: str="production"):
 
 def load_tokens() -> dict:
     # Load access tokens from JSON file
-    if not TOKENS_FILE.exists() or TOKENS_FILE:
+    if not TOKENS_FILE.exists() or TOKENS_FILE.stat().st_size == 0:
         log.error(f"{TOKENS_FILE} not found or empty.")
         return {}
     return json.loads(TOKENS_FILE.read_text())
+
+def load_accounts() -> dict:
+    # Load accounts.json into a dict
+    if not ACCOUNTS_FILE.exists() or ACCOUNTS_FILE.stat().st_size == 0:
+        log.error(f"{ACCOUNTS_FILE} not found or empty.")
+        return {}
+    return json.loads(ACCOUNTS_FILE.read_text())
