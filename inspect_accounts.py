@@ -62,12 +62,11 @@ def main():
     
     tokens = json.loads(TOKENS_FILE.read_text())
     log.info(f"Found {len(tokens)} access tokens: {list(tokens.keys())}")
-    print(list(tokens.keys()))
     
     all_accounts = {}
     
     for nickname, token_data in tokens.items():
-        access_token = token_data
+        access_token = token_data["access_token"]
         log.info(f"Fetching accounts for {nickname}...")
         try:
             accounts = fetch_accounts_for_item(nickname, access_token)
