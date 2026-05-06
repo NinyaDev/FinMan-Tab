@@ -29,7 +29,7 @@ def main():
     tokens = load_tokens()
     
     if not tokens:
-        log.error("No access tokens found. Please run testin_files/link_banks.py first.")
+        log.error("No access tokens found. Please run testing_files/link_banks.py first.")
         raise SystemExit(1)
     
     log.info(f"Pipeline starting - banks: {list(tokens.keys())}")

@@ -3,7 +3,7 @@
 # Edit this file to match your own description style. The code reads it at startup.                                                                                                                            
 
 clean_description:     
-  model: "gemini-2.5-flash-lite"  # Fast and cost-effective for this task.                           
+  model: "gemini-3.1-flash-lite-preview"  # Fast and cost-effective for this task.                           
   template: |                                                                                                                               
     You are cleaning bank transaction merchant strings into a personal finance tracker.
                                                                                                                                             
@@ -16,10 +16,17 @@ clean_description:
                                                             
     {examples}                                                
                                     
-    Now clean this transaction. Use context (amount sign, account, date) to pick a                                                          
+    Now clean this transaction. Use context (amount sign, account, date) to pick a
     fitting description. If it's a transfer between the user's own accounts, describe
-    it casually like "From Savings" or "To Savings". If unclear, default to a short                                                         
-    merchant-name version.                                 
+    it casually like "From Savings" or "To Savings". If unclear, default to a short
+    merchant-name version.
+
+    Strip noise from the raw merchant: "APPLE PAY ENDING IN XXXX", store numbers
+    like "#1234", state codes ("UT", "CA"), "TST*" prefixes, and similar Plaid
+    artifacts are not part of the description. The location may be added ONLY
+    when it's genuinely memorable (a road trip stop, a specific city event).
+    Don't append "en [city]" to every transaction - most should just be the
+    cleaned merchant name or activity.
                                                                                                                                             
     Transaction:                                  
     - Raw merchant: {merchant}                             
@@ -29,7 +36,9 @@ clean_description:
                                                                                                                                             
     Return ONLY the cleaned description text. No quotes, no explanation, no prefix.                                                         
     1-7 words, mixed Spanish/English as the user does.        
-                                                                                                                                            
+
+# These can be improved over time by editing this file and adding more examples of the user's style.
+# Gemini has a cached implicit context.                                                                                                                     
   examples:                                                
     - raw: "INTRST PYMNT"                                     
       clean: "Interest"                                                                                                                     
@@ -56,10 +65,20 @@ clean_description:
     - raw: "QUICK QUACK CAR WASH MEM"                                                                                                       
       clean: "Quick Quack Membership"                                                                                                       
     - raw: "DISCOVER CARD PYMNT"                                                                                                            
-      clean: "Payment"                                                                                                                      
+      clean: "Credit Payment"                                                                                                                      
     - raw: "CHEVRON GAS STATION"                                                                                                            
       clean: "Gas"                                                                                                                          
     - raw: "SCIPIO TRAVEL CENTER"                                                                                                           
       clean: "Stop at Scipio"                                                                                                               
-    - raw: "BELGIAN WAFFLE CO"                                                                                                              
-      clean: "Belgian Waffle"    
+    - raw: "BELGIAN WAFFLE CO"
+      clean: "Belgian Waffle"
+    - raw: "WALMART APPLE PAY ENDING IN 4873"
+      clean: "Walmart - Groceries"
+    - raw: "TACO SHOP CEDAR CITY UT APPLE PAY ENDING IN 4873"
+      clean: "Tacos Bajona"
+    - raw: "FAST STOP 1115 SCIPIO UT APPLE PAY ENDING IN 4873"
+      clean: "Stop at Scipio"
+    - raw: "IG WINERY & TASTIN CEDAR CITY UT 0001152"
+      clean: "Wine tasting"
+    - raw: "TST* WAREHOUSE BAR AND K CEDAR CITY UT APPLE PAY ENDING IN 4873"
+      clean: "Warehouse - Bebida"

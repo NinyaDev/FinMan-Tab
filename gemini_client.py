@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import errors as genai_errors
+from google.genai import types
 
 load_dotenv()
 
@@ -28,7 +29,7 @@ if not GEMINI_API_KEY:
 # Gemini Flash is the right balance of speed + cost. Use 2.5 if available.
 _client = genai.Client(api_key=GEMINI_API_KEY)
 
-# THIS ARE MY PERSONAL EXAMPLES
+# This points to the file where we will add the personal examples.
 PROMPTS_FILE = Path("prompts.yaml")
 
 def _load_prompts():
@@ -41,7 +42,7 @@ def _load_prompts():
 
 _PROMPTS = _load_prompts()
 PROMPT_TEMPLATE = _PROMPTS["template"]
-MODEL_NAME=_PROMPTS["model"]
+MODEL_NAME = _PROMPTS["model"]
 FEWSHOT_EXAMPLES = [(ex["raw"], ex["clean"]) for ex in _PROMPTS["examples"]]
 MAX_RETRIES = 4
 RETRIES_BASE_DELAY = 2  # seconds
@@ -52,11 +53,17 @@ def clean_description(merchant: str, amount: float, account: str, date: str) -> 
     examples = "\n".join([f"- Raw: {raw}\n  Cleaned: {cleaned}" for raw, cleaned in FEWSHOT_EXAMPLES])
     prompt = PROMPT_TEMPLATE.format(examples=examples, merchant=merchant, amount=amount, account=account, date=date)
 
+    # Disable thinking mode (Gemini 3.x defaults to chain-of-thought, slow for our task)
+    config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
+
     for attempt in range(MAX_RETRIES):
         try:
             response = _client.models.generate_content(
                 model=MODEL_NAME,
-                contents=prompt)
+                contents=prompt,
+                config=config)
             cleaned = response.text.strip().strip('"').strip("'")  # Remove any extra whitespace or quotes
             return cleaned
         except (genai_errors.ServerError, genai_errors.ClientError) as e:
