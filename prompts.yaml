@@ -1,0 +1,65 @@
+
+# prompts.yaml - User-customizable prompts and few-shot examples for the LLM cleaner.
+# Edit this file to match your own description style. The code reads it at startup.                                                                                                                            
+
+clean_description:     
+  model: "gemini-2.5-flash-lite"  # Fast and cost-effective for this task.                           
+  template: |                                                                                                                               
+    You are cleaning bank transaction merchant strings into a personal finance tracker.
+                                                                                                                                            
+    The user writes descriptions in casual mixed Spanish and English (Spanglish), short
+    (typically 1-5 words, sometimes up to 7), with bank-system events like transfers                                                        
+    labeled by intent ("From Savings", "Interest", "Payment", "Cuenta") rather than                                                         
+    the bank's raw text.                                                                                                                    
+                                                                                                                                            
+    Match the user's voice EXACTLY using these real examples:                                                                               
+                                                            
+    {examples}                                                
+                                    
+    Now clean this transaction. Use context (amount sign, account, date) to pick a                                                          
+    fitting description. If it's a transfer between the user's own accounts, describe
+    it casually like "From Savings" or "To Savings". If unclear, default to a short                                                         
+    merchant-name version.                                 
+                                                                                                                                            
+    Transaction:                                  
+    - Raw merchant: {merchant}                             
+    - Amount: {amount} (positive = outflow, negative = income/refund)
+    - Account: {account}                                                                                                                    
+    - Date: {date}                         
+                                                                                                                                            
+    Return ONLY the cleaned description text. No quotes, no explanation, no prefix.                                                         
+    1-7 words, mixed Spanish/English as the user does.        
+                                                                                                                                            
+  examples:                                                
+    - raw: "INTRST PYMNT"                                     
+      clean: "Interest"                                                                                                                     
+    - raw: "ZELLE FROM LIO CASA Y PIZZAS"  
+      clean: "Zelle De Lio Casa y Pizzas"                                                                                                   
+    - raw: "TRANSFER FROM SAVINGS"                                                                                                          
+      clean: "From Savings"                                   
+    - raw: "VENMO CASHOUT"                                                                                                                  
+      clean: "Venmo"                                          
+    - raw: "DIRECT DEPOSIT FREELANCE MARCH"                   
+      clean: "FreelanceMarch"                                                                                                               
+    - raw: "DIRECT DEPOSIT EMPLOYER"                          
+      clean: "Cuenta"                                                                                                                       
+    - raw: "CHICK-FIL-A #1234"                                                                                                              
+      clean: "CFA en mi Cumple"                                                                                                             
+    - raw: "APPLEBEE'S NEIGHBORHOOD GRILL"                                                                                                  
+      clean: "Applebees"                                                                                                                    
+    - raw: "THE WAREHOUSE BAR & GRILL"                                                                                                      
+      clean: "Bar en MI cumple (Warehouse y Ritas)"                                                                                         
+    - raw: "LIN'S MARKETPLACE"                                                                                                              
+      clean: "Groceries en Lin's"                                                                                                                         
+    - raw: "UNIVERSITY TRANSCRIPT FEE"                                                                                                      
+      clean: "Official transcript"                                                                                                          
+    - raw: "QUICK QUACK CAR WASH MEM"                                                                                                       
+      clean: "Quick Quack Membership"                                                                                                       
+    - raw: "DISCOVER CARD PYMNT"                                                                                                            
+      clean: "Payment"                                                                                                                      
+    - raw: "CHEVRON GAS STATION"                                                                                                            
+      clean: "Gas"                                                                                                                          
+    - raw: "SCIPIO TRAVEL CENTER"                                                                                                           
+      clean: "Stop at Scipio"                                                                                                               
+    - raw: "BELGIAN WAFFLE CO"                                                                                                              
+      clean: "Belgian Waffle"    
