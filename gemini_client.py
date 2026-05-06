@@ -6,7 +6,6 @@ Spanglish? Or Spanish (Your choice) description of the transaction, to be used i
 I am using my personal descriptions for my output to stay consistent.
 """
 
-import json
 import logging
 import os
 import yaml
@@ -47,35 +46,9 @@ FEWSHOT_EXAMPLES = [(ex["raw"], ex["clean"]) for ex in _PROMPTS["examples"]]
 MAX_RETRIES = 4
 RETRIES_BASE_DELAY = 2  # seconds
 
-# Persistent cache: raw merchant string -> cleaned description.
-# Survives across runs so we don't re-call Gemini for repeated merchants.
-CACHE_FILE = Path("description_cache.json")
-
-def _load_cache():
-    """Load description cache from JSON, or return empty dict if missing/empty/corrupt."""
-    if not CACHE_FILE.exists() or CACHE_FILE.stat().st_size == 0:
-        return {}
-    try:
-        return json.loads(CACHE_FILE.read_text())
-    except json.JSONDecodeError:
-        log.warning(f"{CACHE_FILE} corrupt, starting fresh")
-        return {}
-
-def _save_cache(cache):
-    """Persist cache to JSON. Failures are logged but don't break the pipeline."""
-    try:
-        CACHE_FILE.write_text(json.dumps(cache, indent=2, ensure_ascii=False))
-    except Exception:
-        log.exception(f"Failed to save cache to {CACHE_FILE}")
-
-_CACHE = _load_cache()
-
 def clean_description(merchant: str, amount: float, account: str, date: str) -> str:
     # Clean a raw merchant string to the user's voice using Gemini.
-    # Cache hit -> skip Gemini entirely. Cache miss -> call Gemini and persist result.
-    if merchant in _CACHE:
-        return _CACHE[merchant]
-
+    # Each call is fresh so context (amount, account, date) influences the result.
     examples = "\n".join([f"- Raw: {raw}\n  Cleaned: {cleaned}" for raw, cleaned in FEWSHOT_EXAMPLES])
     prompt = PROMPT_TEMPLATE.format(examples=examples, merchant=merchant, amount=amount, account=account, date=date)
 
@@ -85,8 +58,6 @@ def clean_description(merchant: str, amount: float, account: str, date: str) -> 
                 model=MODEL_NAME,
                 contents=prompt)
             cleaned = response.text.strip().strip('"').strip("'")  # Remove any extra whitespace or quotes
-            _CACHE[merchant] = cleaned
-            _save_cache(_CACHE)
             return cleaned
         except (genai_errors.ServerError, genai_errors.ClientError) as e:
             if attempt < MAX_RETRIES - 1:
