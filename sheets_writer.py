@@ -86,15 +86,30 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
                 "newSheetName": target_name,
                 # Place tab after the last existing tab
                 "insertSheetIndex": len(sheets),
-                "visibility": "VISIBLE"
             }
         }]
     }
     response = service.spreadsheets().batchUpdate(spreadsheetId = spreadsheet_id, body = request_body).execute()
-    
+
     new_props = response["replies"][0]["duplicateSheet"]["properties"]
-    log.info(f"Created tab '{target_name}' (sheet_id={new_props['sheetId']})")
-    return {"title": new_props["title"], "sheetId": new_props["sheetId"]}
+    new_sheet_id = new_props["sheetId"]
+
+    # Template is hidden -> duplicate inherits hidden. Force the new tab visible.
+    visibility_request = {
+        "requests": [{
+            "updateSheetProperties": {
+                "properties": {"sheetId": new_sheet_id, "hidden": False},
+                "fields": "hidden",
+            }
+        }]
+    }
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body=visibility_request,
+    ).execute()
+
+    log.info(f"Created tab '{target_name}' (sheet_id={new_sheet_id}) and made visible")
+    return {"title": new_props["title"], "sheetId": new_sheet_id}
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
