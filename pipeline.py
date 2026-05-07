@@ -5,18 +5,22 @@
 
 import logging
 import time
+from googleapiclient.discovery import build
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 
+from config import CONFIG
 from plaid_client import get_client, load_tokens
 from gemini_client import clean_description
+from google_auth import get_credentials
+from sheets_writer import( get_or_create_month_tab, find_table_in_tab, insert_transaction_into_table)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
 log = logging.getLogger(__name__)
 
 # Transactions to display for now
-MAX_TX_PER_BANK = 5
-GEMINI_PACING = 0.5  # seconds between Gemini calls to avoid rate limits
+MAX_TX_PER_BANK = CONFIG["pipeline"].get("max_tx_per_bank")
+GEMINI_PACING = CONFIG["pipeline"].get("pacing_second", 0.5)  # seconds between Gemini calls to avoid rate limits
 
 def fetch_recent_transactions(client, access_token):
     # Call plaid /transactions/sync for one Item
@@ -24,18 +28,50 @@ def fetch_recent_transactions(client, access_token):
     response = client.transactions_sync(request)
     return response.added
 
+def route_transaction(tx, account_routing):
+    # Look up routing config for a transaction
+    account_id = tx.account_id
+    if account_id not in account_routing:
+        return None
+    
+    routing = account_routing[account_id]
+    income_prefix = routing["income_table_prefix"]
+    outflow_prefix = routing["outflow_table_prefix"]
+    
+    # Plaid convention: positive amount is outflow and negative is income
+    if tx.amount > 0:
+        table_prefix = outflow_prefix
+        direction = "outflow"
+    else: 
+        table_prefix = income_prefix
+        direction = "income"
+        
+    # Single table mode
+    if income_prefix == outflow_prefix:
+        amount = tx.amount
+    else:
+        amount = abs(tx.amount)
+    
+    return routing["bank"], table_prefix, direction, amount
+
 def main():
     plaid_client = get_client(env="production")
+    creds = get_credentials()
+    sheets_service = build("sheets", "v4", credentials=creds)
+    
+    spreadsheet_id = CONFIG["sheet"]["spreadsheet_id"]
+    account_routing = CONFIG["account_routing"]
     tokens = load_tokens()
     
     if not tokens:
-        log.error("No access tokens found. Please run testing_files/link_banks.py first.")
+        log.error("No access tokens found. Please run setup/link_banks.py first.")
         raise SystemExit(1)
     
     log.info(f"Pipeline starting - banks: {list(tokens.keys())}")
     print()
     
     total_processed = 0
+    total_skipped = 0
     
     for nickname, token_data in tokens.items():
         access_token = token_data["access_token"]
@@ -43,23 +79,47 @@ def main():
         
         try:
             transactions = fetch_recent_transactions(plaid_client, access_token)
-            log.info(f"Fetched {len(transactions)} transactions showing first {MAX_TX_PER_BANK}...")
+            transactions.sort(key=lambda t: t.date, reverse=True)
+            log.info(f"Fetched {len(transactions)} transactions showing for {nickname}")
             
-            for tx in transactions[:MAX_TX_PER_BANK]:
-                cleaned = clean_description(merchant = tx.name, amount = tx.amount, account = nickname, date = str(tx.date))
+            tx_slice = transactions[:MAX_TX_PER_BANK] if MAX_TX_PER_BANK else transactions
+            
+            for tx in tx_slice:
+                # 1. Routing
+                routing = route_transaction(tx, account_routing)
+                if routing is None:
+                    log.info(f" Skipping unmapped account_id={tx.account_id} (vault?)")
+                    total_skipped +=1
+                    continue
+                bank, table_prefix, direction, amount = routing
                 
-                # Plaid convention: positive amount = outflow, negative is income
-                direction = "OUT" if tx.amount > 0 else "IN"
-                print(f" [{nickname:10s}] {tx.date} {direction}"
-                      f" ${abs(tx.amount):8.2f}"
-                      f" {tx.name[:40]:40s} → {cleaned}")
-                total_processed += 1
+                #2. Description with Gemini
+                tx_date = str(tx.date)
+                cleaned = clean_description(merchant = tx.name, amount = tx.amount, account = nickname, date = tx_date)
                 time.sleep(GEMINI_PACING)
+                
+                #3. Get/create month tab - uses tx.date, not today's date
+                tab = get_or_create_month_tab(sheets_service, spreadsheet_id, tx_date)
+                
+                # 4. Find the right table
+                table = find_table_in_tab(sheets_service, spreadsheet_id, tab["sheetId"], table_prefix) 
+                
+                # 5. Write to table
+                row = insert_transaction_into_table(sheets_service, spreadsheet_id, table, description = cleaned, amount =amount)
+                
+                log.info(
+                    f" DONE {tx_date}{direction:7s} ${amount:>9.2f}"
+                    f" -> {tab['title']}/{table['name']} row{row}"
+                )
+                total_processed +=1
+                
         except Exception:
-            log.exception(f"Error processing transactions for {nickname}")
+            log.exception(f"Error processing {nickname}")
         print()
         
-    log.info(f"Pipeline done. Total transactions processed: {total_processed} for {len(tokens)} banks.")
+    log.info(f"Pipeline done. wrote: {total_processed} tx."
+             f" skipped {total_skipped} across {len(tokens)} banks.")
+    
 
 if __name__ == "__main__":
     main()
