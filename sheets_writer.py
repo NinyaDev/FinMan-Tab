@@ -111,6 +111,28 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
     log.info(f"Created tab '{target_name}' (sheet_id={new_sheet_id}) and made visible")
     return {"title": new_props["title"], "sheetId": new_sheet_id}
 
+def find_table_in_tab(service, spreadsheet_id: str, sheet_id: int, table_name_prefix: str) -> dict:
+    # Find a table withing a specific tab by name prefix.
+    metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id, includeGridData=False).execute()
+    
+    target_sheet = None
+    for sheet in metadata["sheets"]:
+        if sheet["properties"]["sheetId"] == sheet_id:
+            target_sheet = sheet
+            break
+    if target_sheet is None:
+        raise RuntimeError(f"Sheet with ID {sheet_id} not found in spreadsheet.")
+    
+    tables = target_sheet.get("tables", [])
+    for table in tables:
+        if table["name"].startswith(table_name_prefix):
+            log.info(f"Found table '{table['name']}'"
+                     f" Matching prefix '{table_name_prefix}'")
+            return table
+    raise RuntimeError(f"No table starting with '{table_name_prefix}' in sheet {sheet_id}")
+    
+    
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     creds = get_credentials()
@@ -118,14 +140,24 @@ if __name__ == "__main__":
     service = build('sheets', 'v4', credentials=creds)
     spreadsheet_id = CONFIG["sheet"]["spreadsheet_id"]
     # Test with today's date
-    test_date = "2026-05-06"
-    result = get_or_create_month_tab(service, spreadsheet_id, test_date)
-    print(f"Got tab: {result}")
+    mayo = get_or_create_month_tab(service, spreadsheet_id, "2026-05-06")
+    print(f"\nLooking up tables in '{mayo['title']}' (sheet_id={mayo['sheetId']}):\n")
     
-    # Test again. should not create duplicate
-    result2 = get_or_create_month_tab(service, spreadsheet_id, test_date)
-    print(f"Got tab: {result2}")
+    routing = CONFIG["account_routing"]
+    # Collect unique prefixes
+    prefixes = set()
+    for entry in routing.values():
+        prefixes.add(entry["income_table_prefix"])
+        prefixes.add(entry["outflow_table_prefix"])
     
-    # Test again with different date
-    result3 = get_or_create_month_tab(service, spreadsheet_id, "2026-06-15")
-    print(f"Got tab: {result3}")
+    for prefix in sorted(prefixes):
+        try:
+            table = find_table_in_tab(service, spreadsheet_id, mayo["sheetId"], prefix)
+            r = table["range"]
+            print(
+                f"  {prefix:25s} → {table['name']:30s} "                                                                                                   
+                f"rows {r['startRowIndex']}-{r['endRowIndex']}  "
+                f"cols {r['startColumnIndex']}-{r['endColumnIndex']}"                                                                                      
+              )                              
+        except RuntimeError as e:                                                                                                                          
+            print(f"  {prefix:25s} → NOT FOUND ({e})") 
