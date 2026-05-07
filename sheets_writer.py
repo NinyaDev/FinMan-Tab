@@ -40,6 +40,14 @@ ENGLISH_MONTHS = {
     11: "November",
     12: "December"
 }
+def _col_letter(idx_0: int) -> str:
+    # Convert 0-indexed column to letters
+    result = ""
+    idx = idx_0+1
+    while idx > 0:
+        idx, remainder = divmod(idx -1, 26)
+        result = chr(65+remainder) + result
+    return result
 
 def _month_name_for_date(date: str) -> str:
     # Convert a date string (YYYY-MM-DD) to a month name based on config
@@ -131,7 +139,56 @@ def find_table_in_tab(service, spreadsheet_id: str, sheet_id: int, table_name_pr
             return table
     raise RuntimeError(f"No table starting with '{table_name_prefix}' in sheet {sheet_id}")
     
+
+def insert_transaction_into_table(service, spreadsheet_id: str, table: dict, description: str, amount: float) -> int:
+    """Write transaction to first empty row in table; returns 1-indexed row written."""
+    sheet_id = table["range"]["sheetId"]
+    start_row = table["range"]["startRowIndex"]
+    end_row = table["range"]["endRowIndex"]
+    start_col = table["range"]["startColumnIndex"]
+
+    metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    tab_name = next(
+        (s["properties"]["title"] for s in metadata["sheets"]
+         if s["properties"]["sheetId"] == sheet_id),
+        None,
+    )
+    if tab_name is None:
+        raise RuntimeError(f"Sheet ID {sheet_id} not found")
+
+    data_start = start_row + 2
+    data_end = end_row - 1
+
+    desc_col = _col_letter(start_col)
+    amount_col = _col_letter(start_col + 1)
+    range_to_read = f"'{tab_name}'!{desc_col}{data_start}:{desc_col}{data_end}" # This is like 'Mayo'!C12:C23
     
+    # Return values based on the range
+    result = service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=range_to_read,
+    ).execute()
+    values = result.get("values", [])
+
+    target_row = None
+    for i in range(data_end - data_start + 1):
+        if i >= len(values) or not values[i] or not values[i][0].strip():
+            target_row = data_start + i
+            break
+
+    if target_row is None:
+        raise RuntimeError(f"Table '{table['name']}' has no empty rows")
+
+    target_range = f"'{tab_name}'!{desc_col}{target_row}:{amount_col}{target_row}" # 'Mayo'!C12D12
+    service.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=target_range,
+        valueInputOption="USER_ENTERED",
+        body={"values": [[description, amount]]},
+    ).execute()
+
+    log.info(f"Wrote '{description}' (${amount}) to {tab_name}!{desc_col}{target_row}")
+    return target_row
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -155,9 +212,20 @@ if __name__ == "__main__":
             table = find_table_in_tab(service, spreadsheet_id, mayo["sheetId"], prefix)
             r = table["range"]
             print(
-                f"  {prefix:25s} → {table['name']:30s} "                                                                                                   
+                f"  {prefix:25s} → {table['name']:30s} "
                 f"rows {r['startRowIndex']}-{r['endRowIndex']}  "
-                f"cols {r['startColumnIndex']}-{r['endColumnIndex']}"                                                                                      
-              )                              
-        except RuntimeError as e:                                                                                                                          
-            print(f"  {prefix:25s} → NOT FOUND ({e})") 
+                f"cols {r['startColumnIndex']}-{r['endColumnIndex']}"
+            )
+        except RuntimeError as e:
+            print(f"  {prefix:25s} → NOT FOUND ({e})")
+
+    # Phase 2.3c test: insert a fake transaction into Gastos_Checkings
+    print("\n--- Inserting test transaction ---")
+    test_table = find_table_in_tab(service, spreadsheet_id, mayo["sheetId"], "Gastos_Checkings_")
+    row = insert_transaction_into_table(
+        service, spreadsheet_id, test_table,
+        description="Test - delete me",
+        amount=1.23,
+    )
+    print(f"\n Wrote test transaction to row {row}. Open Mayo and verify, then delete it.")
+
