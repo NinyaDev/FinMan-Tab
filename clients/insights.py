@@ -5,16 +5,82 @@ Monthly summary generator for FinMan.
 """
 
 import base64
+import json
 import logging
+import urllib.parse
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from pathlib import Path
 
+import yaml
+from google.genai import types
 from googleapiclient.discovery import build
+
 from config import CONFIG
+from clients.gemini_client import _client as _gemini_client
 from clients.google_auth import get_credentials
 from clients.sheets_writer import (_month_name_for_date, _prev_month_name, _col_letter, _all_configured_prefixes)
 
 log = logging.getLogger(__name__)
+
+# Monthly-summary prompt
+_PROMPTS_FILE = Path("prompts.yaml")
+_SUMMARY_PROMPT = yaml.safe_load(_PROMPTS_FILE.read_text())["monthly_summary"]
+SUMMARY_MODEL = _SUMMARY_PROMPT["model"]
+SUMMARY_TEMPLATE = _SUMMARY_PROMPT["template"]
+
+CHART_PALETTE = [
+    "#b39ddb",  # lavender
+    "#f48fb1",  # pink
+    "#90caf9",  # sky blue
+    "#a5d6a7",  # mint
+    "#ffab91",  # peach
+    "#80cbc4",  # turquoise
+    "#ce93d8",  # orchid
+    "#ef9a9a",  # coral
+    "#ffb74d",  # amber
+    "#c5e1a5",  # sage
+]
+
+# JSON schema enforced on Gemini's response. Guarantees we get back exactly these fields.
+SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "total_income": {"type": "number"},
+        "total_expenses": {"type": "number"},
+        "net": {"type": "number"},
+        "top_merchants": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "total_spend": {"type": "number"},
+                    "count": {"type": "integer"},
+                },
+                "required": ["name", "total_spend", "count"],
+            },
+        },
+        "spend_by_category": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string"},
+                    "amount": {"type": "number"},
+                },
+                "required": ["category", "amount"],
+            },
+        },
+        "observations": {"type": "array", "items": {"type": "string"}},
+        "commentary": {"type": "string"},
+    },
+    "required": [
+        "total_income", "total_expenses", "net",
+        "top_merchants", "spend_by_category",
+        "observations", "commentary",
+    ],
+}
 
 def send_email(gmail_service, to: str, sender: str, subject: str, html_body: str) -> str:
     """ Send an HTML email via Gmail API. Returns the sent message ID"""
@@ -77,9 +143,12 @@ def _gather_month_transactions(service, spreadsheet_id: str, date_str: str) -> l
         ).execute()
 
         for row in result.get("values", []):
+            # Filtering the carryover balances so we only analyze data for the current month
+            # No transactions
             if len(row) < 2 or not row[0]:
                 continue
             description = str(row[0]).strip()
+            # Ignore carry
             if description in carryover_descriptions:
                 continue
             try:
@@ -96,36 +165,154 @@ def _gather_month_transactions(service, spreadsheet_id: str, date_str: str) -> l
     return transactions
 
 
+def _classify_transactions(transactions: list[dict]) -> list[dict]:
+    """Add a 'direction' field (income or expense) to each transaction.
+    Uses account_routing to know which prefixes are single-table (sign decides) vs two-table (table decides)."""
+    income_prefixes = set()
+    outflow_prefixes = set()
+    single_table_prefixes = set()
+    for entry in CONFIG["account_routing"].values():
+        ip = entry["income_table_prefix"]
+        op = entry["outflow_table_prefix"]
+        if ip == op:
+            single_table_prefixes.add(ip)
+        else:
+            income_prefixes.add(ip)
+            outflow_prefixes.add(op)
+
+    classified = []
+    for tx in transactions:
+        prefix = tx["table_prefix"]
+        amount = tx["amount"]
+        if prefix in single_table_prefixes:
+            direction = "expense" if amount > 0 else "income"
+            display_amount = abs(amount)
+        elif prefix in outflow_prefixes:
+            direction = "expense"
+            display_amount = amount
+        elif prefix in income_prefixes:
+            direction = "income"
+            display_amount = amount
+        else:
+            continue  # not a configured prefix, shouldn't happen after gather
+        classified.append({
+            "description": tx["description"],
+            "amount": display_amount,
+            "direction": direction,
+        })
+    return classified
+
+
+def _summarize_transactions(transactions: list[dict], month_name: str, prior_summary: dict | None = None) -> dict:
+    """Send transactions to Gemini with response_schema enforced; return parsed summary dict."""
+    classified = _classify_transactions(transactions)
+
+    tx_lines = [
+        f"- {tx['description']} | ${tx['amount']:.2f} | {tx['direction']}"
+        for tx in classified
+    ]
+    transactions_text = "\n".join(tx_lines)
+
+    if prior_summary:
+        prior_text = (
+            "\nFor context, the prior month had:\n"
+            f"  Total income:   ${prior_summary.get('total_income', 0):.2f}\n"
+            f"  Total expenses: ${prior_summary.get('total_expenses', 0):.2f}\n"
+            f"  Net:            ${prior_summary.get('net', 0):.2f}\n"
+        )
+    else:
+        prior_text = "\n(No prior month available for comparison.)\n"
+
+    prompt = SUMMARY_TEMPLATE.format(
+        month_name=month_name,
+        transactions=transactions_text,
+        prior_context=prior_text,
+    )
+
+    config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        response_mime_type="application/json",
+        response_schema=SUMMARY_SCHEMA,
+    )
+
+    log.info(f"Calling Gemini for {month_name} summary ({len(classified)} transactions)...")
+    response = _gemini_client.models.generate_content(
+        model=SUMMARY_MODEL,
+        contents=prompt,
+        config=config,
+    )
+    summary = json.loads(response.text)
+    log.info(
+        f"Summary received: income ${summary['total_income']:.2f}, "
+        f"expenses ${summary['total_expenses']:.2f}, "
+        f"net ${summary['net']:.2f}"
+    )
+    return summary
+
+
+def _build_chart_url(spend_by_category: list[dict], title: str = "Spending by Category") -> str:
+    """Return a QuickChart.io URL for a pie chart of category spending.
+    Email clients fetch the URL on open and render the resulting PNG inline."""
+    labels = [item["category"] for item in spend_by_category]
+    data = [item["amount"] for item in spend_by_category]
+
+    config = {
+        "type": "pie",
+        "data": {
+            "labels": labels,
+            "datasets": [{
+                "data": data,
+                "backgroundColor": CHART_PALETTE[:len(labels)],
+            }],
+        },
+        "options": {
+            "title": {"display": True, "text": title, "fontSize": 16},
+            "legend": {"position": "right"},
+            "plugins": {
+                "datalabels": {
+                    "color": "#ffffff",
+                    "font": {"weight": "bold", "size": 13},
+                    "formatter": "(value) => '$' + Math.round(value)",
+                },
+            },
+        },
+    }
+
+    json_config = json.dumps(config, separators=(",", ":"))
+    return (
+        "https://quickchart.io/chart"
+        f"?c={urllib.parse.quote(json_config)}"
+        "&w=600&h=400&bkg=white"
+    )
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    creds = get_credentials()
 
-    sheets = build("sheets", "v4", credentials=creds)
-    spreadsheet_id = CONFIG["sheet"]["spreadsheet_id"]
+    spend_by_category = None
+    title = "Mayo Spending by Category"
 
-    transactions = _gather_month_transactions(sheets, spreadsheet_id, "2026-05-01")
+    # Try the real Gemini path; fall back to demo data if it 503s.
+    try:
+        creds = get_credentials()
+        sheets = build("sheets", "v4", credentials=creds)
+        spreadsheet_id = CONFIG["sheet"]["spreadsheet_id"]
+        transactions = _gather_month_transactions(sheets, spreadsheet_id, "2026-05-01")
+        summary = _summarize_transactions(transactions, "Mayo")
+        print(json.dumps(summary, indent=2))
+        spend_by_category = summary["spend_by_category"]
+    except Exception as e:
+        log.warning(f"Real summary unavailable ({type(e).__name__}); using demo data for chart test.")
+        spend_by_category = [
+            {"category": "Groceries", "amount": 320.00},
+            {"category": "Dining", "amount": 145.00},
+            {"category": "Gas", "amount": 80.00},
+            {"category": "Subscriptions", "amount": 35.00},
+            {"category": "Transfers", "amount": 220.00},
+        ]
+        title = "Demo - Spending by Category"
 
-    # Print first 10 to terminal
-    preview_lines = []
-    for tx in transactions[:10]:
-        line = f"  {tx['table_prefix']:20s} {tx['description'][:30]:30s} ${tx['amount']:>9.2f}"
-        log.info(line)
-        preview_lines.append(line)
-
-    # Email the preview so we end-to-end-test the gather + send flow
-    gmail = build("gmail", "v1", credentials=creds)
-    profile = gmail.users().getProfile(userId="me").execute()
-    my_email = profile["emailAddress"]
-
-    body = (
-        f"<p>Gathered <b>{len(transactions)}</b> transactions from Mayo.</p>"
-        f"<pre style='font-family: monospace'>{chr(10).join(preview_lines)}</pre>"
-    )
-    msg_id = send_email(
-        gmail_service=gmail,
-        to=my_email,
-        sender=my_email,
-        subject="Finance Manager - Mayo Preview",
-        html_body=body,
-    )
-    log.info(f"Sent preview email. Message ID: {msg_id}")
+    chart_url = _build_chart_url(spend_by_category, title=title)
+    print()
+    print("Chart URL (open in browser):")
+    print(chart_url)

@@ -82,3 +82,28 @@ clean_description:
       clean: "Wine tasting"
     - raw: "TST* WAREHOUSE BAR AND K CEDAR CITY UT APPLE PAY ENDING IN 4873"
       clean: "Warehouse - Bebida"
+
+monthly_summary:
+  model: "gemini-3.1-flash-lite-preview"
+  template: |
+    You are a personal finance analyst. Below are all transactions for the user in {month_name}.
+
+    Categorize each transaction into one of:
+    Groceries, Dining, Gas, Subscriptions, Tuition, Transfers, Income, Rent, Utilities, Entertainment, Shopping, Other.
+
+    Then produce a structured JSON summary.
+
+    Transactions for {month_name}:
+    {transactions}
+    {prior_context}
+
+    Required JSON fields:
+    - total_income: sum of all amounts where direction is "income"
+    - total_expenses: sum of all amounts where direction is "expense"
+    - net: total_income minus total_expenses
+    - top_merchants: top 5 merchants by total expense (combine repeats), with name, total_spend, and count
+    - spend_by_category: list of {{category, amount}} for each category that has any expenses
+    - observations: 2-4 short bullet observations about the month's spending patterns
+    - commentary: 1-2 sentences of overall commentary
+
+    Be concise. Use existing description text as merchant names. If a prior month is provided, include trend comparisons in your observations and commentary.
