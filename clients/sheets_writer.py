@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from googleapiclient.discovery import build
 from config import CONFIG
-from google_auth import get_credentials
+from clients.google_auth import get_credentials
 
 log = logging.getLogger(__name__)
 

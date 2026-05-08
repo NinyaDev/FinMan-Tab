@@ -9,10 +9,14 @@ from googleapiclient.discovery import build
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 
 from config import CONFIG
-from plaid_client import get_client, load_tokens, save_tokens
-from gemini_client import clean_description
-from google_auth import get_credentials
-from sheets_writer import( get_or_create_month_tab, find_table_in_tab, insert_transaction_into_table)
+from clients.plaid_client import get_client, load_tokens, save_tokens
+from clients.gemini_client import clean_description
+from clients.google_auth import get_credentials
+from clients.sheets_writer import (
+    get_or_create_month_tab,
+    find_table_in_tab,
+    insert_transaction_into_table,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
