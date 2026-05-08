@@ -9,7 +9,7 @@ from googleapiclient.discovery import build
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 
 from config import CONFIG
-from plaid_client import get_client, load_tokens
+from plaid_client import get_client, load_tokens, save_tokens
 from gemini_client import clean_description
 from google_auth import get_credentials
 from sheets_writer import( get_or_create_month_tab, find_table_in_tab, insert_transaction_into_table)
@@ -20,13 +20,23 @@ log = logging.getLogger(__name__)
 
 # Transactions to display for now
 MAX_TX_PER_BANK = CONFIG["pipeline"].get("max_tx_per_bank")
+START_DATE = CONFIG["pipeline"].get("start_date")
 GEMINI_PACING = CONFIG["pipeline"].get("pacing_second", 0.5)  # seconds between Gemini calls to avoid rate limits
 
-def fetch_recent_transactions(client, access_token):
+def fetch_recent_transactions(client, access_token, cursor=""):
     # Call plaid /transactions/sync for one Item
-    request = TransactionsSyncRequest(access_token=access_token)
-    response = client.transactions_sync(request)
-    return response.added
+    all_added =[]
+    has_more = True
+    while has_more:
+        request = TransactionsSyncRequest(
+            access_token=access_token,
+            cursor= cursor)
+    
+        response = client.transactions_sync(request)
+        all_added.extend(response.added)
+        cursor = response.next_cursor
+        has_more = response.has_more
+    return all_added, cursor
 
 def route_transaction(tx, account_routing):
     # Look up routing config for a transaction
@@ -75,14 +85,22 @@ def main():
     
     for nickname, token_data in tokens.items():
         access_token = token_data["access_token"]
-        log.info(f"Fetching transactions for {nickname}...")
+        prior_cursor = token_data.get("cursor", "")
+        log.info(f"Syncing {nickname} (cursor={'<empty, first run>' if not prior_cursor else 'set'})...")
         
         try:
-            transactions = fetch_recent_transactions(plaid_client, access_token)
-            transactions.sort(key=lambda t: t.date, reverse=True)
-            log.info(f"Fetched {len(transactions)} transactions showing for {nickname}")
+            transactions, new_cursor = fetch_recent_transactions(plaid_client, access_token, prior_cursor)
+            # Checking if there's no cursor and there is a START DATE (ONETIME)
+            if not prior_cursor and START_DATE:
+                before = len(transactions)
+                transactions = [t for t in transactions if str(t.date) >= START_DATE]
+                log.info(f"First-sync filter: kept {len(transactions)}/{before} tx >= {START_DATE}")
             
-            tx_slice = transactions[:MAX_TX_PER_BANK] if MAX_TX_PER_BANK else transactions
+            # First within this batch
+            transactions.sort(key=lambda t: t.date, reverse=True)
+            log.info(f"Fetched {len(transactions)} new transactions showing for {nickname}")
+            
+            tx_slice = transactions
             
             for tx in tx_slice:
                 # 1. Routing
@@ -105,14 +123,20 @@ def main():
                 table = find_table_in_tab(sheets_service, spreadsheet_id, tab["sheetId"], table_prefix) 
                 
                 # 5. Write to table
-                row = insert_transaction_into_table(sheets_service, spreadsheet_id, table, description = cleaned, amount =amount)
+                row = insert_transaction_into_table(sheets_service, spreadsheet_id, table, description = cleaned, amount = amount)
                 
                 log.info(
                     f" DONE {tx_date}{direction:7s} ${amount:>9.2f}"
                     f" -> {tab['title']}/{table['name']} row{row}"
                 )
                 total_processed +=1
-                
+        
+            # Save cursor only after the bank's full tx loops succeeds.
+            # If anything raises, keep old cursor.
+            tokens[nickname]["cursor"] = new_cursor
+            save_tokens(tokens)
+            log.info(f"Saved cursor for {nickname}")
+            
         except Exception:
             log.exception(f"Error processing {nickname}")
         print()

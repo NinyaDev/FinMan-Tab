@@ -56,6 +56,11 @@ def load_tokens() -> dict:
         return {}
     return json.loads(TOKENS_FILE.read_text())
 
+def save_tokens(tokens: dict) -> None:
+    # Persist tokens dict (overwrite file)
+    TOKENS_FILE.write_text(json.dumps(tokens, indent=2))
+    
+
 def load_accounts() -> dict:
     # Load accounts.json into a dict
     if not ACCOUNTS_FILE.exists() or ACCOUNTS_FILE.stat().st_size == 0:

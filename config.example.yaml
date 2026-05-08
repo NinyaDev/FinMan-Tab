@@ -1,37 +1,38 @@
- # config.example.yaml - Template config. Copy to config.yaml and fill in your values.                                                                      
-# config.yaml is gitignored; never commit your real spreadsheet_id or routing.                                                                             
-                                                            
-sheet:                                                                                                                                                     
-  spreadsheet_id: "PASTE_YOUR_GOOGLE_SHEET_ID_HERE"        
-  template_tab: "Template"                                                                                                                                 
-                                                              
-# How tabs are named.                                                                                                                                      
-tab_strategy:                                              
-  type: "monthly"                # single | monthly | yearly                                                                                               
-  naming: "spanish"              # spanish | english | numeric                                                                                             
-                                                                                                                                                            
-# Map Plaid account_ids (from inspect_accounts.py) to tables in your sheet.                                                                                
-account_routing:                                              
-  "PLAID_ACCOUNT_ID_FOR_BOFAS_CHECKING":                                                                                                                         
-    bank: "bofa"                                          
-    income_table_prefix: "BofA_Income"                    
-    outflow_table_prefix: "BofA_Spend"                                                                                                                   
-                                                            
-  "PLAID_ACCOUNT_ID_FOR_SOFI_CHECKING":                                                                                                                    
-    bank: "sofi"                                  
-    income_table_prefix: "Sofi_Checkings_Income"                                                                                                              
-    outflow_table_prefix: "Gastos_Checkings_Spend"                                                                                                                                                            
-                                                                                                                                                                    
-  "PLAID_ACCOUNT_ID_FOR_ONEPAY":           
-    bank: "onepay"                                                                                                                                         
-    income_table_prefix: "OnePay_APR"                      
-    outflow_table_prefix: "OnePay_APR"                                                                                                                     
-                                            
-# Operational tuning.                                                                                                                                      
-llm:                                                       
-  max_retries: 4                                                                                                                                           
-  retry_base_delay: 2               
-                                                                                                                                                            
-pipeline:                                  
-  max_tx_per_bank: null          # null = no cap; integer = cap per run (dev / dry run)                                                                    
-  pacing_seconds: 0.5                       
+ # config.example.yaml - Template config. Copy to config.yaml and fill in your values.
+# config.yaml is gitignored; never commit your real spreadsheet_id or routing.
+
+sheet:
+  spreadsheet_id: "PASTE_YOUR_GOOGLE_SHEET_ID_HERE"
+  template_tab: "Template"
+
+# How tabs are named.
+tab_strategy:
+  type: "monthly"                # single | monthly | yearly
+  naming: "spanish"              # spanish | english | numeric
+
+# Map Plaid account_ids (from inspect_accounts.py) to tables in your sheet.
+account_routing:
+  "PLAID_ACCOUNT_ID_FOR_BOFAS_CHECKING":
+    bank: "bofa"
+    income_table_prefix: "BofA_Income"
+    outflow_table_prefix: "BofA_Spend"
+
+  "PLAID_ACCOUNT_ID_FOR_SOFI_CHECKING":
+    bank: "sofi"
+    income_table_prefix: "Sofi_Checkings_Income"
+    outflow_table_prefix: "Gastos_Checkings_Spend"
+
+  "PLAID_ACCOUNT_ID_FOR_ONEPAY":
+    bank: "onepay"
+    income_table_prefix: "OnePay_APR"
+    outflow_table_prefix: "OnePay_APR"
+
+# Operational tuning.
+llm:
+  max_retries: 4
+  retry_base_delay: 2
+
+pipeline:
+  max_tx_per_bank: null          # null = no cap; integer = cap per run (dev / dry run)
+  pacing_second: 0.5
+  start_date: null # null = no filter set for start date.
