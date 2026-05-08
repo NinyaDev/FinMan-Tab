@@ -62,6 +62,22 @@ def _month_name_for_date(date: str) -> str:
     else:
         raise ValueError(f"Unknown naming strategy: {naming}")
 
+def _get_sheet_meta(service, spreadsheet_id: str, sheet_id: int) -> dict:
+    # Return the sheet object (properties, tables, etc.) for a given sheet_id.
+    metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    for sheet in metadata["sheets"]:
+        if sheet["properties"]["sheetId"] == sheet_id:
+            return sheet
+    raise RuntimeError(f"Sheet ID {sheet_id} not found in spreadsheet")
+
+def _all_configured_prefixes() -> set:
+    # Unique table prefixes from account_routing config.
+    prefixes = set()
+    for entry in CONFIG["account_routing"].values():
+        prefixes.add(entry["income_table_prefix"])
+        prefixes.add(entry["outflow_table_prefix"])
+    return prefixes
+
 def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
     # If the tab already exists, return it. Otherwise duplicate template and rename duplicate to month name
     
@@ -120,22 +136,12 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
     return {"title": new_props["title"], "sheetId": new_sheet_id}
 
 def find_table_in_tab(service, spreadsheet_id: str, sheet_id: int, table_name_prefix: str) -> dict:
-    # Find a table withing a specific tab by name prefix.
-    metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id, includeGridData=False).execute()
-    
-    target_sheet = None
-    for sheet in metadata["sheets"]:
-        if sheet["properties"]["sheetId"] == sheet_id:
-            target_sheet = sheet
-            break
-    if target_sheet is None:
-        raise RuntimeError(f"Sheet with ID {sheet_id} not found in spreadsheet.")
-    
-    tables = target_sheet.get("tables", [])
+    # Find a table within a specific tab by name prefix.
+    sheet = _get_sheet_meta(service, spreadsheet_id, sheet_id)
+    tables = sheet.get("tables", [])
     for table in tables:
         if table["name"].startswith(table_name_prefix):
-            log.info(f"Found table '{table['name']}'"
-                     f" Matching prefix '{table_name_prefix}'")
+            log.info(f"Found table '{table['name']}' matching prefix '{table_name_prefix}'")
             return table
     raise RuntimeError(f"No table starting with '{table_name_prefix}' in sheet {sheet_id}")
     
@@ -147,14 +153,8 @@ def insert_transaction_into_table(service, spreadsheet_id: str, table: dict, des
     end_row = table["range"]["endRowIndex"]
     start_col = table["range"]["startColumnIndex"]
 
-    metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    tab_name = next(
-        (s["properties"]["title"] for s in metadata["sheets"]
-         if s["properties"]["sheetId"] == sheet_id),
-        None,
-    )
-    if tab_name is None:
-        raise RuntimeError(f"Sheet ID {sheet_id} not found")
+    sheet = _get_sheet_meta(service, spreadsheet_id, sheet_id)
+    tab_name = sheet["properties"]["title"]
 
     data_start = start_row + 2
     data_end = end_row - 1
@@ -200,14 +200,7 @@ if __name__ == "__main__":
     mayo = get_or_create_month_tab(service, spreadsheet_id, "2026-05-06")
     print(f"\nLooking up tables in '{mayo['title']}' (sheet_id={mayo['sheetId']}):\n")
     
-    routing = CONFIG["account_routing"]
-    # Collect unique prefixes
-    prefixes = set()
-    for entry in routing.values():
-        prefixes.add(entry["income_table_prefix"])
-        prefixes.add(entry["outflow_table_prefix"])
-    
-    for prefix in sorted(prefixes):
+    for prefix in sorted(_all_configured_prefixes()):
         try:
             table = find_table_in_tab(service, spreadsheet_id, mayo["sheetId"], prefix)
             r = table["range"]
