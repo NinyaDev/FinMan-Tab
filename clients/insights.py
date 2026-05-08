@@ -47,18 +47,85 @@ def _gather_month_transactions(service, spreadsheet_id: str, date_str: str) -> l
     
     # Build set of carryover descriptions to exclude
     carryover_descriptions = set()
-    for spec in CONFIG_get
+    for spec in CONFIG.get("balance_carryover") or []:
+        carryover_descriptions.add(
+            spec["description"].format(prev_month=prev_month)
+        )
+
+    transactions = []
+    for table in sheet.get("tables", []):
+        prefix = next(
+            (p for p in _all_configured_prefixes() if table["name"].startswith(p)),
+            None,
+        )
+        if prefix is None:
+            continue  # skip Fidelity, Chase - not in routing
+
+        start_row = table["range"]["startRowIndex"]
+        end_row = table["range"]["endRowIndex"]
+        start_col = table["range"]["startColumnIndex"]
+        data_start = start_row + 2
+        data_end = end_row - 1
+        desc_col = _col_letter(start_col)
+        amount_col = _col_letter(start_col + 1)
+        range_to_read = f"'{month_name}'!{desc_col}{data_start}:{amount_col}{data_end}"
+
+        result = service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=range_to_read,
+            valueRenderOption="UNFORMATTED_VALUE",
+        ).execute()
+
+        for row in result.get("values", []):
+            if len(row) < 2 or not row[0]:
+                continue
+            description = str(row[0]).strip()
+            if description in carryover_descriptions:
+                continue
+            try:
+                amount = float(row[1])
+            except (ValueError, TypeError):
+                continue
+            transactions.append({
+                "description": description,
+                "amount": amount,
+                "table_prefix": prefix,
+            })
+
+    log.info(f"Gathered {len(transactions)} transactions from {month_name}")
+    return transactions
+
 
 if __name__ == "__main__":
-    # Smoke test
-    logging.basicConfig(level = logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     creds = get_credentials()
+
+    sheets = build("sheets", "v4", credentials=creds)
+    spreadsheet_id = CONFIG["sheet"]["spreadsheet_id"]
+
+    transactions = _gather_month_transactions(sheets, spreadsheet_id, "2026-05-01")
+
+    # Print first 10 to terminal
+    preview_lines = []
+    for tx in transactions[:10]:
+        line = f"  {tx['table_prefix']:20s} {tx['description'][:30]:30s} ${tx['amount']:>9.2f}"
+        log.info(line)
+        preview_lines.append(line)
+
+    # Email the preview so we end-to-end-test the gather + send flow
     gmail = build("gmail", "v1", credentials=creds)
-    
     profile = gmail.users().getProfile(userId="me").execute()
     my_email = profile["emailAddress"]
-    log.info(f"Authenticated as {my_email}")
-    
-    msg_id = send_email(gmail_service = gmail, to = my_email, sender = my_email, subject="Finance-Manager", html_body="<h2>HELLO FROM FINANCE MANAGER</h2>")
-    log.info(f"Sent. Message ID: {msg_id}")
+
+    body = (
+        f"<p>Gathered <b>{len(transactions)}</b> transactions from Mayo.</p>"
+        f"<pre style='font-family: monospace'>{chr(10).join(preview_lines)}</pre>"
+    )
+    msg_id = send_email(
+        gmail_service=gmail,
+        to=my_email,
+        sender=my_email,
+        subject="Finance Manager - Mayo Preview",
+        html_body=body,
+    )
+    log.info(f"Sent preview email. Message ID: {msg_id}")
