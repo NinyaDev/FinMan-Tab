@@ -78,6 +78,33 @@ def _all_configured_prefixes() -> set:
         prefixes.add(entry["outflow_table_prefix"])
     return prefixes
 
+def _rename_tables_with_month(service, spreadsheet_id: str, sheet_id: int, month_name: str) -> None:
+    # Rename each table in this sheet to <prefix><month_name>. Idempotent.
+    sheet = _get_sheet_meta(service, spreadsheet_id, sheet_id)
+    tables = sheet.get("tables", [])
+    prefixes = sorted(_all_configured_prefixes(), key=len, reverse=True)
+
+    requests = []
+    for table in tables:
+        for prefix in prefixes:
+            if table["name"].startswith(prefix):
+                new_name = f"{prefix}{month_name}"
+                if table["name"] != new_name:
+                    requests.append({
+                        "updateTable": {
+                            "table": {"tableId": table["tableId"], "name": new_name},
+                            "fields": "name",
+                        }
+                    })
+                break
+
+    if requests:
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": requests},
+        ).execute()
+        log.info(f"Renamed {len(requests)} tables in '{month_name}' tab")
+
 def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
     # If the tab already exists, return it. Otherwise duplicate template and rename duplicate to month name
     
@@ -131,6 +158,11 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
         spreadsheetId=spreadsheet_id,
         body=visibility_request,
     ).execute()
+
+    try:
+        _rename_tables_with_month(service, spreadsheet_id, new_sheet_id, target_name)
+    except Exception:
+        log.warning(f"Failed to rename tables in '{target_name}' (continuing)", exc_info=True)
 
     log.info(f"Created tab '{target_name}' (sheet_id={new_sheet_id}) and made visible")
     return {"title": new_props["title"], "sheetId": new_sheet_id}
