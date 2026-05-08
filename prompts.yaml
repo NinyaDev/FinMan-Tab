@@ -9,7 +9,7 @@ clean_description:
                                                                                                                                             
     The user writes descriptions in casual mixed Spanish and English (Spanglish), short
     (typically 1-5 words, sometimes up to 7), with bank-system events like transfers                                                        
-    labeled by intent ("From Savings", "Interest", "Payment", "Cuenta") rather than                                                         
+    labeled by intent ("From Savings", "To Savings", "Interest", "Payment", "Cuenta") rather than                                                         
     the bank's raw text.                                                                                                                    
                                                                                                                                             
     Match the user's voice EXACTLY using these real examples:                                                                               
@@ -45,7 +45,13 @@ clean_description:
     - raw: "ZELLE FROM LIO CASA Y PIZZAS"  
       clean: "Zelle De Lio Casa y Pizzas"                                                                                                   
     - raw: "TRANSFER FROM SAVINGS"                                                                                                          
-      clean: "From Savings"                                   
+      clean: "From Savings"       
+    - raw: "TRANSFER FROM CHECKINGS"
+      clean: "From Checkings"
+    - raw: "TRANSFER TO SAVINGS"                                                                                                          
+      clean: "To Savings"       
+    - raw: "TRANSFER TO CHECKINGS"
+      clean: "To Checkings"                               
     - raw: "VENMO CASHOUT"                                                                                                                  
       clean: "Venmo"                                          
     - raw: "DIRECT DEPOSIT FREELANCE MARCH"                   
@@ -67,7 +73,7 @@ clean_description:
     - raw: "DISCOVER CARD PYMNT"                                                                                                            
       clean: "Credit Payment"                                                                                                                      
     - raw: "CHEVRON GAS STATION"                                                                                                            
-      clean: "Gas"                                                                                                                          
+      clean: "Gas"
     - raw: "SCIPIO TRAVEL CENTER"                                                                                                           
       clean: "Stop at Scipio"                                                                                                               
     - raw: "BELGIAN WAFFLE CO"
@@ -84,12 +90,20 @@ clean_description:
       clean: "Warehouse - Bebida"
 
 monthly_summary:
-  model: "gemini-3.1-flash-lite-preview"
+  model: "gemini-2.5-flash-lite"
   template: |
     You are a personal finance analyst. Below are all transactions for the user in {month_name}.
 
-    Categorize each transaction into one of:
-    Groceries, Dining, Gas, Subscriptions, Tuition, Transfers, Income, Rent, Utilities, Entertainment, Shopping, Other.
+    Categorize each EXPENSE transaction (direction = "expense") into EXACTLY ONE of these categories.
+    Do NOT invent new ones:
+    Groceries, Dining, Gas, Subscriptions, Tuition, Transfers, Rent, Utilities, Entertainment, Shopping, Other.
+    If unsure, use "Other".
+
+    Income transactions (direction = "income") are NEVER categorized into spend_by_category.
+    They only contribute to total_income.
+
+    The "income" / "expense" label after each transaction is AUTHORITATIVE. Do NOT re-classify
+    based on the description text. Use it as-is.
 
     Then produce a structured JSON summary.
 
@@ -101,8 +115,8 @@ monthly_summary:
     - total_income: sum of all amounts where direction is "income"
     - total_expenses: sum of all amounts where direction is "expense"
     - net: total_income minus total_expenses
-    - top_merchants: top 5 merchants by total expense (combine repeats), with name, total_spend, and count
-    - spend_by_category: list of {{category, amount}} for each category that has any expenses
+    - top_merchants: top 5 merchants by total expense (combine repeats of the same name), with name, total_spend, and count
+    - spend_by_category: AGGREGATED list of EXPENSES ONLY (direction = "expense"). NEVER include income transactions. Exactly one entry per unique category. Each category appears AT MOST ONCE. The sum of all amounts MUST equal total_expenses.
     - observations: 2-4 short bullet observations about the month's spending patterns
     - commentary: 1-2 sentences of overall commentary
 
