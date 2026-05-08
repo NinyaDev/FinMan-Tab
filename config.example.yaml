@@ -35,4 +35,9 @@ llm:
 pipeline:
   max_tx_per_bank: null          # null = no cap; integer = cap per run (dev / dry run)
   pacing_second: 0.5
-  start_date: null # null = no filter set for start date.
+  start_date: null               # null = no filter; "YYYY-MM-DD" to skip historical tx on first sync
+
+# Optional: write a starting-balance row at the top of each new month tab.
+# Each entry: prefix (which table), cell (optional A1 in prior tab - if absent,
+# uses prior table's footer Amount cell), description ({prev_month} substituted).
+balance_carryover: []

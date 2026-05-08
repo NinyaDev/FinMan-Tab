@@ -62,6 +62,15 @@ def _month_name_for_date(date: str) -> str:
     else:
         raise ValueError(f"Unknown naming strategy: {naming}")
 
+def _prev_month_name(date_str: str) -> str:
+    # Month name for the month BEFORE the given date
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    if dt.month == 1:
+        prev_dt = dt.replace(year=dt.year - 1, month=12, day=1)
+    else:
+        prev_dt = dt.replace(month=dt.month - 1, day = 1)
+    return _month_name_for_date(prev_dt.strftime("%Y-%m-%d"))
+
 def _get_sheet_meta(service, spreadsheet_id: str, sheet_id: int) -> dict:
     # Return the sheet object (properties, tables, etc.) for a given sheet_id.
     metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
@@ -104,6 +113,57 @@ def _rename_tables_with_month(service, spreadsheet_id: str, sheet_id: int, month
             body={"requests": requests},
         ).execute()
         log.info(f"Renamed {len(requests)} tables in '{month_name}' tab")
+
+def _carry_over_balances(service, spreadsheet_id: str, new_sheet_id: int, date_str: str) -> None:
+    # Carry prior month balances into newly created tab per Config
+    specs = CONFIG.get("balance_carryover") or []
+    if not specs:
+        return
+    
+    prev_month = _prev_month_name(date_str)
+    
+    metadata = service.spreadsheets().get(spreadsheetId = spreadsheet_id).execute()
+    prior_sheet_id = next(
+        (s["properties"]["sheetId"] for s in metadata["sheets"]
+         if s["properties"]["title"] ==prev_month), None
+    )
+    if prior_sheet_id is None:
+        log.info(f"No prior month tab '{prev_month}' - skipping carryover")
+        return
+    
+    for spec in specs:
+        try:
+            _apply_carryover_spec(service, spreadsheet_id, spec, prev_month, prior_sheet_id, new_sheet_id)
+        except Exception:
+            log.warning(f"Carryover failed for {spec.get('prefix','?')}", exc_info=True)
+
+def _apply_carryover_spec(service, spreadsheet_id, spec, prev_month, prior_sheet_id, new_sheet_id):
+    prefix = spec["prefix"]
+    description = spec["description"].format(prev_month=prev_month)
+    
+    # Source range: explicit cell, or prior table's footer amount cell
+    if "cell" in spec:
+        source_range = f"'{prev_month}'!{spec['cell']}"
+    else:
+        prior_table = find_table_in_tab(service, spreadsheet_id, prior_sheet_id, prefix)
+        footer_row = prior_table["range"]["endRowIndex"]
+        amount_col = _col_letter(prior_table["range"]["startColumnIndex"] +1)
+        source_range = f"'{prev_month}'!{amount_col}{footer_row}"
+
+    result = service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=source_range,
+        valueRenderOption="UNFORMATTED_VALUE",
+    ).execute()
+    
+    values = result.get("values", [])
+    if not values or not values[0] or values[0][0] in ("", None):
+        log.info(f"Carryover source {source_range} is empty - skipping {prefix}")
+        return
+    amount = round(float(values[0][0]), 2)
+    dest_table = find_table_in_tab(service, spreadsheet_id, new_sheet_id, prefix)
+    insert_transaction_into_table(service, spreadsheet_id, dest_table, description, amount)
+    log.info(f"Carryover: '{description}' ${amount:.2f} -> {dest_table['name']}")
 
 def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
     # If the tab already exists, return it. Otherwise duplicate template and rename duplicate to month name
@@ -163,6 +223,11 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
         _rename_tables_with_month(service, spreadsheet_id, new_sheet_id, target_name)
     except Exception:
         log.warning(f"Failed to rename tables in '{target_name}' (continuing)", exc_info=True)
+
+    try:
+        _carry_over_balances(service, spreadsheet_id, new_sheet_id, date)
+    except Exception:
+        log.warning(f"Failed to carry over balances for '{target_name}' (continuing)", exc_info=True)
 
     log.info(f"Created tab '{target_name}' (sheet_id={new_sheet_id}) and made visible")
     return {"title": new_props["title"], "sheetId": new_sheet_id}
