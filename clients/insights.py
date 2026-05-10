@@ -8,6 +8,7 @@ import base64
 import json
 import logging
 import urllib.parse
+from datetime import date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -28,6 +29,10 @@ _PROMPTS_FILE = Path("prompts.yaml")
 _SUMMARY_PROMPT = yaml.safe_load(_PROMPTS_FILE.read_text())["monthly_summary"]
 SUMMARY_MODEL = _SUMMARY_PROMPT["model"]
 SUMMARY_TEMPLATE = _SUMMARY_PROMPT["template"]
+
+# Persistent state for the monthly summary: tracks last sent month + history
+# of past summaries (used as prior_summary context for trend comparisons).
+SUMMARY_STATE_FILE = Path("summary_state.json")
 
 CHART_PALETTE = [
     "#b39ddb",  # lavender
@@ -301,19 +306,115 @@ def _build_summary_email_body(summary: dict, month_name: str, chart_url: str, pr
     """
 
 
+def _load_summary_state() -> dict:
+    """Load summary_state.json, or return an empty default if not present."""
+    if not SUMMARY_STATE_FILE.exists():
+        return {"last_summarized": None, "history": {}}
+    return json.loads(SUMMARY_STATE_FILE.read_text())
+
+
+def _save_summary_state(state: dict) -> None:
+    """Persist state to disk (overwrite)."""
+    SUMMARY_STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def _prior_month_key(month_key: str) -> str:
+    """'2026-05' -> '2026-04'. Handles year wrap ('2027-01' -> '2026-12')."""
+    year, month = map(int, month_key.split("-"))
+    if month == 1:
+        return f"{year - 1}-12"
+    return f"{year}-{month - 1:02d}"
+
+
+def _should_send_summary(today: date, state: dict) -> str | None:
+    """Decide whether a summary is due. Returns the 'YYYY-MM' month to summarize, or None.
+
+    Target month = the month immediately before today's month. Send if state's
+    last_summarized is null or older than the target month. This makes the cron
+    self-recovering: a missed day on the 1st gets caught up on the 2nd, etc."""
+    if today.month == 1:
+        target_year = today.year - 1
+        target_month_num = 12
+    else:
+        target_year = today.year
+        target_month_num = today.month - 1
+    target_month = f"{target_year}-{target_month_num:02d}"
+
+    last = state.get("last_summarized")
+    if last is None or last < target_month:
+        return target_month
+    return None
+
+
+def maybe_send_monthly_summary(creds, today: date | None = None) -> str | None:
+    """If a monthly summary is due, generate and send it. Returns the month
+    summarized ('YYYY-MM') or None if skipped. State only updates on a fully
+    successful send, so any failure is naturally retried by tomorrow's run."""
+    if today is None:
+        today = date.today()
+
+    state = _load_summary_state()
+    target_month = _should_send_summary(today, state)
+    if target_month is None:
+        log.info(f"No summary due (last_summarized={state.get('last_summarized')})")
+        return None
+
+    target_date_str = f"{target_month}-01"
+    month_name = _month_name_for_date(target_date_str)
+    log.info(f"Summary due for {month_name} ({target_month})")
+
+    sheets = build("sheets", "v4", credentials=creds)
+    spreadsheet_id = CONFIG["sheet"]["spreadsheet_id"]
+    transactions = _gather_month_transactions(sheets, spreadsheet_id, target_date_str)
+
+    prior_summary = state.get("history", {}).get(_prior_month_key(target_month))
+    summary = _summarize_transactions(transactions, month_name, prior_summary=prior_summary)
+
+    chart_url = _build_chart_url(
+        summary["spend_by_category"],
+        title=f"{month_name} Spending by Category",
+    )
+    html_body = _build_summary_email_body(summary, month_name, chart_url, prior_summary)
+
+    gmail = build("gmail", "v1", credentials=creds)
+    profile = gmail.users().getProfile(userId="me").execute()
+    my_email = profile["emailAddress"]
+    msg_id = send_email(
+        gmail_service=gmail,
+        to=my_email,
+        sender=my_email,
+        subject=f"Finance Manager - {month_name} Summary - Net ${summary['net']:.2f}",
+        html_body=html_body,
+    )
+    log.info(f"Sent {month_name} summary email. Message ID: {msg_id}")
+
+    # Persist state ONLY after successful send.
+    state["last_summarized"] = target_month
+    state.setdefault("history", {})[target_month] = {
+        "net": summary["net"],
+        "total_income": summary["total_income"],
+        "total_expenses": summary["total_expenses"],
+        "spend_by_category": summary["spend_by_category"],
+    }
+    _save_summary_state(state)
+    log.info(f"Updated summary_state.json: last_summarized={target_month}")
+    return target_month
+
+
 def _build_chart_url(spend_by_category: list[dict], title: str = "Spending by Category") -> str:
     """Return a QuickChart.io URL for a pie chart of category spending.
     Email clients fetch the URL on open and render the resulting PNG inline.
 
-    Pre-computes percentages and passes them as data values - bulletproof
-    across QuickChart / Chart.js versions vs. relying on inline JS formatters."""
+    Percentages are baked into the legend label text (e.g. "Groceries 34% - $320")
+    because QuickChart's JS formatter evaluation is unreliable across versions."""
     amounts = [item["amount"] for item in spend_by_category]
     total = sum(amounts) or 1
     percentages = [round(a / total * 100) for a in amounts]
-    # Legend shows category + dollar amount; slice labels show percentage.
+    # Legend label carries the percentage AND dollar amount - reliable across renderers.
+    # Slice labels show the bare percentage number (datalabels formatter just appends nothing).
     labels = [
-        f"{item['category']} (${round(item['amount'])})"
-        for item in spend_by_category
+        f"{item['category']} {percentages[i]}% - ${round(item['amount'])}"
+        for i, item in enumerate(spend_by_category)
     ]
 
     config = {
@@ -332,7 +433,6 @@ def _build_chart_url(spend_by_category: list[dict], title: str = "Spending by Ca
                 "datalabels": {
                     "color": "#ffffff",
                     "font": {"weight": "bold", "size": 13},
-                    "formatter": "(value) => value + '%'",
                 },
             },
         },
@@ -348,57 +448,15 @@ def _build_chart_url(spend_by_category: list[dict], title: str = "Spending by Ca
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
     creds = get_credentials()
-    month_name = "Mayo"
 
-    # Try the real Gemini path; fall back to demo summary if Gemini is unavailable.
-    try:
-        sheets = build("sheets", "v4", credentials=creds)
-        spreadsheet_id = CONFIG["sheet"]["spreadsheet_id"]
-        transactions = _gather_month_transactions(sheets, spreadsheet_id, "2026-05-01")
-        summary = _summarize_transactions(transactions, month_name)
-    except Exception as e:
-        log.warning(f"Real summary unavailable ({type(e).__name__}); using demo summary for email test.")
-        summary = {
-            "total_income": 1000.00,
-            "total_expenses": 755.00,
-            "net": 245.00,
-            "top_merchants": [
-                {"name": "Walmart", "total_spend": 320.00, "count": 4},
-                {"name": "Chevron", "total_spend": 80.00, "count": 2},
-                {"name": "Apple", "total_spend": 5.99, "count": 1},
-            ],
-            "spend_by_category": [
-                {"category": "Groceries", "amount": 320.00},
-                {"category": "Dining", "amount": 145.00},
-                {"category": "Gas", "amount": 80.00},
-                {"category": "Subscriptions", "amount": 35.00},
-                {"category": "Transfers", "amount": 175.00},
-            ],
-            "observations": [
-                "Subscriptions account for ~5% of monthly expenses.",
-                "Groceries trending normal vs typical month.",
-            ],
-            "commentary": "Solid month overall - net positive savings driven by lower-than-average dining and entertainment spend.",
-        }
+    # In production this is just date.today(). For testing before June 1 we
+    # override to pretend it's June 1 so the orchestrator targets Mayo.
+    fake_today = date(2026, 6, 1)
+    log.info(f"Running maybe_send_monthly_summary with today={fake_today} (test override)")
 
-    chart_url = _build_chart_url(
-        summary["spend_by_category"],
-        title=f"{month_name} Spending by Category",
-    )
-    html_body = _build_summary_email_body(summary, month_name, chart_url)
-
-    # Send the email to the authenticated address.
-    gmail = build("gmail", "v1", credentials=creds)
-    profile = gmail.users().getProfile(userId="me").execute()
-    my_email = profile["emailAddress"]
-
-    msg_id = send_email(
-        gmail_service=gmail,
-        to=my_email,
-        sender=my_email,
-        subject=f"Finance Manager - {month_name} Summary",
-        html_body=html_body,
-    )
-    log.info(f"Sent {month_name} summary email to {my_email}. Message ID: {msg_id}")
+    result = maybe_send_monthly_summary(creds, today=fake_today)
+    if result:
+        log.info(f"Summary sent for {result}. summary_state.json updated.")
+    else:
+        log.info("No summary needed; state file unchanged.")

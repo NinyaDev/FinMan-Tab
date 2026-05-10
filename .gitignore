@@ -5,6 +5,7 @@ credentials.json
 token.json
 access_tokens.json
 accounts.json
+summary_state.json
 
 __pycache__/
 *.pyc

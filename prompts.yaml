@@ -99,6 +99,13 @@ monthly_summary:
     Groceries, Dining, Gas, Subscriptions, Tuition, Transfers, Rent, Utilities, Entertainment, Shopping, Other.
     If unsure, use "Other".
 
+    "Transfers" specifically means moving money between the user's OWN accounts:
+    descriptions like "To Savings", "From Savings", "To Checking", "From Checking".
+    These are not "spending" - they are internal movement.
+    Venmo, Zelle, and similar peer-to-peer payments should be categorized by the
+    description's context if available (e.g. "Venmo - Rent" -> Rent). When the
+    description is just "Venmo" with no context, use "Other".
+
     Income transactions (direction = "income") are NEVER categorized into spend_by_category.
     They only contribute to total_income.
 
