@@ -450,12 +450,10 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     creds = get_credentials()
 
-    # In production this is just date.today(). For testing before June 1 we
-    # override to pretend it's June 1 so the orchestrator targets Mayo.
-    fake_today = date(2026, 6, 1)
-    log.info(f"Running maybe_send_monthly_summary with today={fake_today} (test override)")
-
-    result = maybe_send_monthly_summary(creds, today=fake_today)
+    # Manual trigger using today's real date. To force a particular target month
+    # during testing, edit summary_state.json (e.g. set last_summarized to null
+    # to make the orchestrator believe nothing has been summarized yet).
+    result = maybe_send_monthly_summary(creds)
     if result:
         log.info(f"Summary sent for {result}. summary_state.json updated.")
     else:

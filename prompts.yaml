@@ -90,7 +90,7 @@ clean_description:
       clean: "Warehouse - Bebida"
 
 monthly_summary:
-  model: "gemini-2.5-flash-lite"
+  model: "gemini-3.1-flash-lite-preview"
   template: |
     You are a personal finance analyst. Below are all transactions for the user in {month_name}.
 
