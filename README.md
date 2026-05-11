@@ -13,11 +13,12 @@ Built around an existing personal-finance spreadsheet rather than replacing it: 
 ### Screenshots
 
 <p align="center">
-  <sub><i>Pipeline running in the terminal - placeholder, screenshot coming soon</i></sub>
+  <img src="https://github.com/user-attachments/assets/9de14ae7-6493-4242-bae5-10a1a13d5919" alt="Pipeline running in GitHub Actions" width="860">
 </p>
+<p align="center"><sub><b>Pipeline running in GitHub Actions</b> — Mayo tab auto-created, carryover written, 21 transactions cleaned by Gemini and routed to the right tables.</sub></p>
 
 <p align="center">
-  <sub><i>Mayo tab with carryover row and Plaid transactions - placeholder, screenshot coming soon</i></sub>
+  <sub><i>Mayo tab in Google Sheets - placeholder, screenshot coming soon</i></sub>
 </p>
 
 ---
