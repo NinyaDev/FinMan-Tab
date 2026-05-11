@@ -1,6 +1,6 @@
 # Finance Manager
 
-A Python pipeline that pulls bank transactions through **Plaid**, cleans the merchant descriptions through **Google Gemini Flash** (in your own voice via few-shot prompting), and writes them into the right table of the right tab in **your own Google Sheet** - automatically, on a daily cron.
+A Python pipeline that pulls bank transactions through **Plaid**, cleans the merchant descriptions through **Google Gemini Flash** (in your own voice via few-shot prompting), and writes them into the right table of the right tab in **your own Google Sheet**. At the start of every month it sends you an HTML email summary of the prior month with an LLM-generated commentary and a category breakdown pie chart. Runs unattended on a free-tier GitHub Actions cron.
 
 Built around an existing personal-finance spreadsheet rather than replacing it: month tabs, structured tables, running balances, and TOTAL formulas all keep working. The pipeline is config-driven and fork-friendly - your account IDs, your tab names, and your prompt examples live in a few YAML files, not in the code.
 
@@ -29,9 +29,10 @@ Built around an existing personal-finance spreadsheet rather than replacing it: 
 - **Date-driven tab routing:** uses `tx.date` (not `today`) so a cron at 12:01 AM on June 1 still files May 30 transactions into Mayo, not Junio.
 - **Auto-creates new month tabs from a hidden Template:** duplicates the Template, makes the new tab visible, renames every table inside it to `<prefix><MonthName>` for cleanliness.
 - **Configurable balance carryover:** writes a starting-balance row at the top of each new month tab - pulled either from a specific cell in the prior tab (e.g. running balance) or the prior month's table footer (e.g. credit-card total).
-- **Idempotent and crash-safe:** Plaid cursors persist per-bank to `access_tokens.json` only after the bank's transaction loop fully succeeds, so a mid-run failure retries cleanly on the next run.
+- **Monthly summary email:** on the first run of each new month, Gemini analyzes the prior month's transactions and produces a structured summary (net, top merchants, spend-by-category, observations, commentary). An HTML email with an embedded pie chart (via QuickChart.io) lands in your inbox. State persists across runs so each month is summarized exactly once, with prior-month context fed into Gemini for trend comparisons.
+- **Idempotent and crash-safe:** Plaid cursors persist per-bank to `access_tokens.json` only after the bank's transaction loop fully succeeds, so a mid-run failure retries cleanly on the next run. The summary state file works the same way - only marks a month as summarized after the email send succeeds.
 - **Optional first-sync date filter:** ignore historical transactions on the very first run via `pipeline.start_date` in `config.yaml`. Doesn't affect any future run.
-- **Single-process, no database, no server:** state lives in JSON / YAML files; runs as a single Python script on a free-tier GitHub Actions cron.
+- **Single-process, no database, no server:** state lives in JSON / YAML files; runs as a single Python script on a free-tier GitHub Actions cron every 3 days at 3 AM Mountain Time.
 
 ---
 
@@ -50,27 +51,26 @@ Built around an existing personal-finance spreadsheet rather than replacing it: 
 ## Architecture
 
 ```
-                                    ┌────────────────────┐
-                                    │   pipeline.py      │
-                                    │   (orchestrator)   │
-                                    └─────────┬──────────┘
-                                              │
-              ┌───────────────────────────────┼───────────────────────────────┐
-              ▼                               ▼                               ▼
-   ┌──────────────────┐           ┌──────────────────┐           ┌──────────────────────┐
-   │ clients/         │           │ clients/         │           │ clients/             │
-   │ plaid_client     │  --tx-->  │ gemini_client    │  --desc-> │ sheets_writer        │
-   │                  │           │                  │           │                      │
-   │ /transactions/   │           │ few-shot         │           │ Tabs + Tables +      │
-   │   sync + cursor  │           │ + retries        │           │   carryover + write  │
-   └──────────────────┘           └──────────────────┘           └──────────────────────┘
-            │                              │                                │
-            ▼                              ▼                                ▼
-   access_tokens.json              prompts.yaml                     Google Sheet
-   (cursor state)                  (~20 examples)                   (your existing one)
+                                ┌────────────────────┐
+                                │   pipeline.py      │
+                                │   (orchestrator)   │
+                                └─────────┬──────────┘
+                                          │
+        ┌────────────────────┬────────────┼────────────┬────────────────────┐
+        ▼                    ▼            ▼            ▼                    ▼
+ ┌──────────────┐    ┌──────────────┐  ┌─────┐  ┌──────────────┐    ┌──────────────────┐
+ │ clients/     │    │ clients/     │  │ ... │  │ clients/     │    │ clients/         │
+ │ plaid_client │ tx │ gemini_client│  │     │  │ sheets_writer│    │ insights         │
+ │ sync+cursor  │───>│ few-shot     │->│     │->│ tabs/tables/ │    │ monthly summary  │
+ │              │    │ + retries    │  │     │  │ carryover    │    │ email + chart    │
+ └──────────────┘    └──────────────┘  └─────┘  └──────────────┘    └──────────────────┘
+        │                    │                          │                    │
+        ▼                    ▼                          ▼                    ▼
+ access_tokens.json    prompts.yaml              Google Sheet         Gmail + Gemini +
+ (cursor state)        (~20 examples)            (your existing)      summary_state.json
 ```
 
-Per transaction the orchestrator runs: **fetch → route by `account_id` → clean via Gemini → find/create month tab → find table by prefix → write to first empty row.** The carryover step runs once at tab creation, before any transaction is written.
+Per transaction the orchestrator runs: **fetch → route by `account_id` → clean via Gemini → find/create month tab → find table by prefix → write to first empty row.** The carryover step runs once at tab creation, before any transaction is written. After the bank loop, `maybe_send_monthly_summary` checks state and (when the prior month hasn't been summarized) sends an HTML email summary with an embedded category pie chart.
 
 ---
 
@@ -212,15 +212,19 @@ pipeline:
 │   ├── plaid_client.py     # Plaid SDK + token / cursor I/O
 │   ├── gemini_client.py    # Gemini wrapper with retries + fail-soft
 │   ├── sheets_writer.py    # Tab creation, table rename, carryover, writes
-│   └── google_auth.py      # Shared OAuth helper (Gmail + Sheets scopes)
+│   ├── google_auth.py      # Shared OAuth helper (Gmail + Sheets scopes)
+│   └── insights.py         # Monthly summary: gather, Gemini, chart URL, email
 ├── setup/
 │   ├── link_banks.py       # One-time Flask page for Plaid Link
 │   ├── inspect_accounts.py # Dumps account IDs per linked bank
 │   └── hello_*.py          # Historical API smoke tests
 ├── tests/
-│   ├── test_routing.py     # route_transaction sign handling
-│   └── test_sheets_helpers.py  # _col_letter, _prev_month_name, prefix gathering
-├── prompts.yaml            # Gemini prompt template + few-shot examples
+│   ├── test_routing.py             # route_transaction sign handling
+│   ├── test_sheets_helpers.py      # _col_letter, _prev_month_name, prefix gathering
+│   └── test_insights.py            # summary state + categorize + email body + chart URL
+├── .github/workflows/
+│   └── cron.yml            # Daily GitHub Actions cron + state-file caching
+├── prompts.yaml            # Gemini prompt templates + few-shot examples (cleaner + summary)
 ├── config.example.yaml     # Config template for forks
 ├── .env.example            # Env-var template for forks
 ├── requirements.txt
@@ -228,7 +232,7 @@ pipeline:
 └── README.md
 ```
 
-`config.yaml`, `.env`, `credentials.json`, `token.json`, `access_tokens.json`, and `accounts.json` are all gitignored - secrets and personal IDs never get committed.
+`config.yaml`, `.env`, `credentials.json`, `token.json`, `access_tokens.json`, `accounts.json`, and `summary_state.json` are all gitignored - secrets and personal IDs never get committed.
 
 ---
 
@@ -238,28 +242,32 @@ pipeline:
 python -m unittest discover tests
 ```
 
-Twelve tests covering the deterministic helpers and the routing logic. Tests use stdlib `unittest` only - no extra dependency.
+34 tests covering routing, sheets helpers, and insights (state file round-trip, classification, chart URL, email body composition). Tests use stdlib `unittest` only - no extra dependency.
 
 ---
 
 ## Roadmap and known limitations
 
 **Currently shipped:**
-- Plaid → Gemini → Sheets pipeline runs end-to-end and is verified live
+- Plaid → Gemini → Sheets pipeline runs end-to-end and is verified live in production
 - Cursor-based incremental sync (idempotent reruns)
 - Month-tab auto-creation with table rename + balance carryover
-- 12 passing unit tests
+- Monthly summary email with category breakdown pie chart, structured Gemini output, and trend comparisons against prior-month history
+- GitHub Actions cron deployment - runs every 3 days at 3 AM Mountain Time, fully unattended
+- Cache-based state persistence so cursors + summary state survive between cron runs
+- 34 passing unit tests
 
-**Pending:**
-- **GitHub Actions cron deployment** - so it runs unattended at 3 AM daily
-- Categorization tags + a monthly insights tab with LLM commentary
-- Optional receipt-photo OCR via Gemini vision
+**Potential future work:**
+- Per-transaction category labeling in the sheet itself (not just in the monthly summary)
+- Per-table batching to reduce Sheets API chatter (currently ~3 metadata fetches per transaction)
+- Cross-year carryover automation
 
 **Limitations to be aware of:**
-- Gemini Free Tier has 30 RPM and 500 RPD limits. A 17-tx/day run uses far less than that, but a heavy backfill could hit the per-minute cap.
+- Gemini Free Tier has 30 RPM and 500 RPD limits. Typical daily volume uses far less than that, but a heavy backfill could hit the per-minute cap.
 - The Sheets API is chatty - ~3 calls per transaction. Fine for personal volumes (<100 tx/day); would need batching for higher volumes.
 - The first call to Plaid `/transactions/sync` for a brand-new Item sometimes returns `added=[]` while Plaid does its background pull. Re-run after a minute and it catches up.
 - Cross-year carryover (Diciembre 2026 → Enero 2027) requires manually filling the January carryover row by hand the first time, since each year's transactions live in a separate spreadsheet.
+- GitHub Actions scheduled runs can drift by up to ~30 minutes during peak load (GitHub's own caveat). Not a problem for daily personal use.
 
 ---
 
