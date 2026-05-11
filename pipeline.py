@@ -12,6 +12,7 @@ from config import CONFIG
 from clients.plaid_client import get_client, load_tokens, save_tokens
 from clients.gemini_client import clean_description
 from clients.google_auth import get_credentials
+from clients.insights import maybe_send_monthly_summary
 from clients.sheets_writer import (
     get_or_create_month_tab,
     find_table_in_tab,
@@ -147,7 +148,14 @@ def main():
         
     log.info(f"Pipeline done. wrote: {total_processed} tx."
              f" skipped {total_skipped} across {len(tokens)} banks.")
-    
+
+    # Monthly summary attempt - non-critical; failures must not crash the pipeline.
+    # The orchestrator self-recovers by retrying on the next daily run.
+    try:
+        maybe_send_monthly_summary(creds)
+    except Exception:
+        log.exception("Monthly summary failed (pipeline continues normally)")
+
 
 if __name__ == "__main__":
     main()
