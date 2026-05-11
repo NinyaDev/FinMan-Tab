@@ -102,7 +102,7 @@ def main():
                 log.info(f"First-sync filter: kept {len(transactions)}/{before} tx >= {START_DATE}")
             
             # First within this batch
-            transactions.sort(key=lambda t: t.date, reverse=True)
+            transactions.sort(key=lambda t: t.date)
             log.info(f"Fetched {len(transactions)} new transactions showing for {nickname}")
             
             tx_slice = transactions
