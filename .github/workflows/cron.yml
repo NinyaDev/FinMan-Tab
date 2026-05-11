@@ -1,0 +1,87 @@
+name: Automated Finance Sync
+
+# Run every 3 days at 10 UTC (3am MST / 4am MDT). Resets pattern at month
+# boundaries (cron can't track "literal every 3 days" without external state).
+# Manual trigger via workflow_dispatch is always available.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 10 */3 * *"
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    env:
+      # Plaid + Gemini secrets become env vars; python-dotenv reads them
+      # whether they come from .env or the process environment, so no .env file needed.
+      PLAID_CLIENT_ID: ${{ secrets.PLAID_CLIENT_ID }}
+      PLAID_PRODUCTION_SECRET: ${{ secrets.PLAID_PRODUCTION_SECRET }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # State files survive between runs via cache. The key is unique per run
+      # so we always save successfully; the restore-keys prefix grabs the
+      # latest saved copy from any prior run.
+      - name: Restore state cache (cursors + summary history)
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            access_tokens.json
+            token.json
+            summary_state.json
+          key: fm-state-${{ github.run_id }}
+          restore-keys: |
+            fm-state-
+
+      # If the cache had nothing for a given file (first run, or evicted),
+      # seed it from the corresponding secret. Existing files are left alone.
+      - name: Bootstrap missing state files from secrets
+        env:
+          ACCESS_TOKENS: ${{ secrets.PLAID_ACCESS_TOKENS_JSON }}
+          GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          SUMMARY_STATE: ${{ secrets.SUMMARY_STATE_JSON }}
+        run: |
+          [ -f access_tokens.json ] || printf "%s" "$ACCESS_TOKENS" > access_tokens.json
+          [ -f token.json ] || printf "%s" "$GOOGLE_TOKEN" > token.json
+          [ -f summary_state.json ] || printf "%s" "$SUMMARY_STATE" > summary_state.json
+          ls -la access_tokens.json token.json summary_state.json
+
+      # Static config files are rewritten every run from secrets. They
+      # don't change between runs, so re-creating them is cheap and safe.
+      - name: Write static config files (credentials, config.yaml)
+        env:
+          CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          CONFIG: ${{ secrets.CONFIG_YAML }}
+        run: |
+          printf "%s" "$CREDENTIALS" > credentials.json
+          printf "%s" "$CONFIG" > config.yaml
+
+      - name: Run pipeline
+        run: python pipeline.py
+
+      # Save the updated state files for tomorrow. if: always() ensures we save
+      # even if pipeline.py crashed partway through - cursors that DID advance
+      # need to be preserved to avoid re-fetching tomorrow.
+      - name: Save state cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            access_tokens.json
+            token.json
+            summary_state.json
+          key: fm-state-${{ github.run_id }}
