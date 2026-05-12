@@ -26,7 +26,7 @@ Built around an existing personal-finance spreadsheet rather than replacing it: 
 ## Features
 
 - **Bank ingest via Plaid `/transactions/sync`:** incremental, cursor-based fetch - each run only sees transactions that posted since the previous run. No duplicates, no manual de-dup logic.
-- **Spanglish description cleaning via Gemini 3.1 Flash Lite:** few-shot prompted with ~20 of your own real descriptions, so output stays in your voice (`"Walmart - Groceries"`, `"Gas en Sapp Bros"`, `"Tuition Southern Utah University"`). Fail-soft - if Gemini is overloaded for a transaction, the raw merchant string lands in the sheet so nothing is ever lost.
+- **Spanglish description cleaning via Gemini 3.1 Flash Lite:** few-shot prompted with ~20 of your own real descriptions, so output stays in your voice (`"Walmart - Groceries"`, `"Gas en Chevron"`, `"Paycheck from Student Job"`). Fail-soft - if Gemini is overloaded for a transaction, the raw merchant string lands in the sheet so nothing is ever lost.
 - **Date-driven tab routing:** uses `tx.date` (not `today`) so a cron at 12:01 AM on June 1 still files May 30 transactions into Mayo, not Junio.
 - **Auto-creates new month tabs from a hidden Template:** duplicates the Template, makes the new tab visible, renames every table inside it to `<prefix><MonthName>` for cleanliness.
 - **Configurable balance carryover:** writes a starting-balance row at the top of each new month tab - pulled either from a specific cell in the prior tab (e.g. running balance) or the prior month's table footer (e.g. credit-card total).
