@@ -1,12 +1,14 @@
 name: Automated Finance Sync
 
-# Run every 3 days at 10 UTC (3am MST / 4am MDT). Resets pattern at month
-# boundaries (cron can't track "literal every 3 days" without external state).
-# Manual trigger via workflow_dispatch is always available.
+# Run every 3 days at 08:17 UTC. Off-the-hour minute avoids the top-of-hour
+# runner queue, and 08:17 UTC (~2:17am MDT / 1:17am MST) gives a multi-hour
+# buffer before Gemini's busy window even if GitHub delays the run.
+# Resets pattern at month boundaries (cron can't track "literal every 3 days"
+# without external state). Manual trigger via workflow_dispatch is always available.
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 10 */3 * *"
+    - cron: "17 8 */3 * *"
 
 jobs:
   run-pipeline:
