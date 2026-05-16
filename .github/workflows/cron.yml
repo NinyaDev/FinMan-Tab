@@ -49,16 +49,23 @@ jobs:
           restore-keys: |
             fm-state-
 
-      # If the cache had nothing for a given file (first run, or evicted),
-      # seed it from the corresponding secret. Existing files are left alone.
-      - name: Bootstrap missing state files from secrets
+      # access_tokens.json (Plaid cursors) and summary_state.json (monthly
+      # email flag) only seed from secrets when missing - the cached copy
+      # carries forward run-to-run state we cannot afford to reset.
+      #
+      # token.json is ALWAYS overwritten from the secret. A dead refresh_token
+      # in the cache would crash every run until the cache is purged, and
+      # purging the cache also wipes the Plaid cursor. Sourcing token.json
+      # from the secret every run means rotating Google auth is a one-step
+      # secret update with no cache surgery.
+      - name: Bootstrap state files (token.json always from secret)
         env:
           ACCESS_TOKENS: ${{ secrets.PLAID_ACCESS_TOKENS_JSON }}
           GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN_JSON }}
           SUMMARY_STATE: ${{ secrets.SUMMARY_STATE_JSON }}
         run: |
           [ -f access_tokens.json ] || printf "%s" "$ACCESS_TOKENS" > access_tokens.json
-          [ -f token.json ] || printf "%s" "$GOOGLE_TOKEN" > token.json
+          printf "%s" "$GOOGLE_TOKEN" > token.json
           [ -f summary_state.json ] || printf "%s" "$SUMMARY_STATE" > summary_state.json
           ls -la access_tokens.json token.json summary_state.json
 
