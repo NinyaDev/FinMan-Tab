@@ -3,10 +3,14 @@ Shared Google OAuth helper for Gmail and Sheets API access.
 Loads or refreshes credentials from token.json
 """
 
+import logging
 import os.path
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
+
+log = logging.getLogger(__name__)
 
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
@@ -24,7 +28,18 @@ def get_credentials():
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except RefreshError:
+                log.error(
+                    "Google refresh_token rejected by Google's OAuth endpoint "
+                    "(invalid_grant). The refresh_token in token.json is dead "
+                    "and cannot be revived. To recover: locally run "
+                    "`rm token.json && python setup/hello_sheets.py`, complete "
+                    "the browser consent, then paste the contents of the new "
+                    "token.json into the GOOGLE_TOKEN_JSON GitHub secret."
+                )
+                raise
         else:
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
