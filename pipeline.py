@@ -100,7 +100,11 @@ def main():
     
     total_processed = 0
     total_skipped = 0
-    
+    # Track per-bank failures so we can exit non-zero at the end of the run.
+    # GitHub Actions only sends a failure email when the workflow exits non-zero,
+    # so silent per-bank errors would otherwise leave the run green and unnoticed.
+    bank_errors = []
+
     for nickname, token_data in tokens.items():
         access_token = token_data["access_token"]
         prior_cursor = token_data.get("cursor", "")
@@ -170,8 +174,10 @@ def main():
                 )
             else:
                 log.exception("Plaid API error for %s (error_code=%s)", nickname, code)
-        except Exception:
+            bank_errors.append((nickname, f"Plaid {code}"))
+        except Exception as e:
             log.exception(f"Error processing {nickname}")
+            bank_errors.append((nickname, type(e).__name__))
         print()
         
     log.info(f"Pipeline done. wrote: {total_processed} tx."
@@ -183,6 +189,18 @@ def main():
         maybe_send_monthly_summary(creds)
     except Exception:
         log.exception("Monthly summary failed (pipeline continues normally)")
+
+    # Exit non-zero if any bank had an error so the GitHub Actions run goes red
+    # and the failure email actually fires. Successful banks have already
+    # written their data and saved their cursors by this point.
+    if bank_errors:
+        summary = ", ".join(f"{nick} ({reason})" for nick, reason in bank_errors)
+        log.error(
+            "%d bank(s) had errors this run: %s. Exiting non-zero to trigger "
+            "GitHub Actions failure notification.",
+            len(bank_errors), summary
+        )
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
