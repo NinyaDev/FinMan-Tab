@@ -3,8 +3,10 @@
     For each bank: 1) Fetch new transactions. 2) Run each through Gemini. 3) Print structured output to terminal.    
 """
 
+import json
 import logging
 import time
+import plaid
 from googleapiclient.discovery import build
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 
@@ -27,6 +29,17 @@ log = logging.getLogger(__name__)
 MAX_TX_PER_BANK = CONFIG["pipeline"].get("max_tx_per_bank")
 START_DATE = CONFIG["pipeline"].get("start_date")
 GEMINI_PACING = CONFIG["pipeline"].get("pacing_second", 0.5)  # seconds between Gemini calls to avoid rate limits
+
+# Plaid error codes that mean "this Item needs the user to re-authenticate via
+# Plaid Link." When we see one, the access_token is no longer usable until the
+# user runs setup/link_banks.py and updates PLAID_ACCESS_TOKENS_JSON. Other
+# Plaid errors fall through to the generic exception handler.
+PLAID_RELINK_CODES = {
+    "ITEM_LOGIN_REQUIRED",
+    "INVALID_CREDENTIALS",
+    "INVALID_MFA",
+    "ITEM_LOCKED",
+}
 
 def fetch_recent_transactions(client, access_token, cursor=""):
     # Call plaid /transactions/sync for one Item
@@ -142,6 +155,21 @@ def main():
             save_tokens(tokens)
             log.info(f"Saved cursor for {nickname}")
             
+        except plaid.ApiException as e:
+            body = json.loads(e.body) if getattr(e, "body", None) else {}
+            code = body.get("error_code", "UNKNOWN")
+            if code in PLAID_RELINK_CODES:
+                log.error(
+                    "Bank %s needs re-link (Plaid error_code=%s). The "
+                    "access_token is no longer usable. To recover: locally run "
+                    "`python setup/link_banks.py` to re-authenticate this "
+                    "Item, then paste the updated access_tokens.json contents "
+                    "into the PLAID_ACCESS_TOKENS_JSON GitHub secret. Other "
+                    "banks in this run were unaffected.",
+                    nickname, code
+                )
+            else:
+                log.exception("Plaid API error for %s (error_code=%s)", nickname, code)
         except Exception:
             log.exception(f"Error processing {nickname}")
         print()
