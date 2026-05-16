@@ -243,8 +243,53 @@ def find_table_in_tab(service, spreadsheet_id: str, sheet_id: int, table_name_pr
     raise RuntimeError(f"No table starting with '{table_name_prefix}' in sheet {sheet_id}")
     
 
-def insert_transaction_into_table(service, spreadsheet_id: str, table: dict, description: str, amount: float) -> int:
-    """Write transaction to first empty row in table; returns 1-indexed row written."""
+# When a named table runs out of empty rows we grow it by this many rows in
+# one API call. Larger N reduces round-trips and keeps the table layout from
+# changing on every transaction; 10 is a comfortable buffer for a monthly tab.
+_TABLE_EXTEND_ROWS = 10
+
+
+def _extend_table_range(service, spreadsheet_id: str, table: dict, additional_rows: int) -> dict:
+    # Grow a named table's endRowIndex downward to claim already-blank cells
+    # in its own columns. The startColumnIndex/endColumnIndex are unchanged,
+    # so adjacent tables in other columns (e.g., OnePay in F-G while
+    # Discover lives in C-D) are physically untouched - no row shifting.
+    new_end = table["range"]["endRowIndex"] + additional_rows
+    request = {
+        "updateTable": {
+            "table": {
+                "tableId": table["tableId"],
+                "range": {
+                    "sheetId": table["range"]["sheetId"],
+                    "startRowIndex": table["range"]["startRowIndex"],
+                    "endRowIndex": new_end,
+                    "startColumnIndex": table["range"]["startColumnIndex"],
+                    "endColumnIndex": table["range"]["endColumnIndex"],
+                },
+            },
+            "fields": "range",
+        }
+    }
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": [request]},
+    ).execute()
+    log.info(
+        f"Extended table '{table['name']}' by {additional_rows} rows "
+        f"(end row {table['range']['endRowIndex']} -> {new_end})"
+    )
+
+    # Refresh the table dict so the caller's empty-row scan sees the new range.
+    sheet = _get_sheet_meta(service, spreadsheet_id, table["range"]["sheetId"])
+    for t in sheet.get("tables", []):
+        if t["tableId"] == table["tableId"]:
+            return t
+    raise RuntimeError(f"Table '{table['name']}' missing from sheet after extension")
+
+
+def _find_empty_data_row(service, spreadsheet_id: str, table: dict):
+    # Scan the description column inside the table for the first blank row.
+    # Returns the 1-indexed row number, or None if the table is full.
     sheet_id = table["range"]["sheetId"]
     start_row = table["range"]["startRowIndex"]
     end_row = table["range"]["endRowIndex"]
@@ -257,26 +302,43 @@ def insert_transaction_into_table(service, spreadsheet_id: str, table: dict, des
     data_end = end_row - 1
 
     desc_col = _col_letter(start_col)
-    amount_col = _col_letter(start_col + 1)
-    range_to_read = f"'{tab_name}'!{desc_col}{data_start}:{desc_col}{data_end}" # This is like 'Mayo'!C12:C23
-    
-    # Return values based on the range
+    range_to_read = f"'{tab_name}'!{desc_col}{data_start}:{desc_col}{data_end}"
+
     result = service.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=range_to_read,
     ).execute()
     values = result.get("values", [])
 
-    target_row = None
     for i in range(data_end - data_start + 1):
         if i >= len(values) or not values[i] or not values[i][0].strip():
-            target_row = data_start + i
-            break
+            return data_start + i
+    return None
 
+
+def insert_transaction_into_table(service, spreadsheet_id: str, table: dict, description: str, amount: float) -> int:
+    """Write transaction to first empty row in table; returns 1-indexed row written.
+
+    Auto-extends the table by _TABLE_EXTEND_ROWS when full, then retries the
+    empty-row scan once. The retry should always succeed because the extension
+    claims previously-blank cells; a second failure means something deeper is
+    wrong with the sheet and we surface it as a RuntimeError.
+    """
+    target_row = _find_empty_data_row(service, spreadsheet_id, table)
     if target_row is None:
-        raise RuntimeError(f"Table '{table['name']}' has no empty rows")
+        log.info(f"Table '{table['name']}' is full; auto-extending")
+        table = _extend_table_range(service, spreadsheet_id, table, _TABLE_EXTEND_ROWS)
+        target_row = _find_empty_data_row(service, spreadsheet_id, table)
+        if target_row is None:
+            raise RuntimeError(f"Table '{table['name']}' still full after extension")
 
-    target_range = f"'{tab_name}'!{desc_col}{target_row}:{amount_col}{target_row}" # 'Mayo'!C12D12
+    start_col = table["range"]["startColumnIndex"]
+    desc_col = _col_letter(start_col)
+    amount_col = _col_letter(start_col + 1)
+    sheet = _get_sheet_meta(service, spreadsheet_id, table["range"]["sheetId"])
+    tab_name = sheet["properties"]["title"]
+
+    target_range = f"'{tab_name}'!{desc_col}{target_row}:{amount_col}{target_row}"
     service.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
         range=target_range,
