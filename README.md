@@ -32,6 +32,7 @@ Built around an existing personal-finance spreadsheet rather than replacing it: 
 - **Configurable balance carryover:** writes a starting-balance row at the top of each new month tab - pulled either from a specific cell in the prior tab (e.g. running balance) or the prior month's table footer (e.g. credit-card total).
 - **Monthly summary email:** on the first run of each new month, Gemini analyzes the prior month's transactions and produces a structured summary (net, top merchants, spend-by-category, observations, commentary). An HTML email with an embedded pie chart (via QuickChart.io) lands in your inbox. State persists across runs so each month is summarized exactly once, with prior-month context fed into Gemini for trend comparisons.
 - **Idempotent and crash-safe:** Plaid cursors persist per-bank to `access_tokens.json` only after the bank's transaction loop fully succeeds, so a mid-run failure retries cleanly on the next run. The summary state file works the same way - only marks a month as summarized after the email send succeeds.
+- **Rate-limit resilient Sheets writes:** each transaction reuses one spreadsheet metadata fetch instead of re-reading it 3+ times (~5 reads down to ~2), and every Sheets call retries with exponential backoff on a transient 429/5xx, so a quota burst during month-tab creation waits out the window instead of crashing the run.
 - **Optional first-sync date filter:** ignore historical transactions on the very first run via `pipeline.start_date` in `config.yaml`. Doesn't affect any future run.
 - **Single-process, no database, no server:** state lives in JSON / YAML files; runs as a single Python script on a free-tier GitHub Actions cron every 3 days at 3 AM Mountain Time.
 
@@ -222,6 +223,7 @@ pipeline:
 ├── tests/
 │   ├── test_routing.py             # route_transaction sign handling
 │   ├── test_sheets_helpers.py      # _col_letter, _prev_month_name, prefix gathering
+│   ├── test_sheets_throttle.py     # read-quota A/B + backoff retry against a fake Sheets service
 │   └── test_insights.py            # summary state + categorize + email body + chart URL
 ├── .github/workflows/
 │   └── cron.yml            # Daily GitHub Actions cron + state-file caching
@@ -243,7 +245,7 @@ pipeline:
 python -m unittest discover tests
 ```
 
-34 tests covering routing, sheets helpers, and insights (state file round-trip, classification, chart URL, email body composition). Tests use stdlib `unittest` only - no extra dependency.
+39 tests covering routing, sheets helpers, insights (state file round-trip, classification, chart URL, email body composition), and Sheets rate-limit handling (read-quota A/B + backoff retry against a fake service). Tests use stdlib `unittest` only - no extra dependency.
 
 ---
 
@@ -256,16 +258,17 @@ python -m unittest discover tests
 - Monthly summary email with category breakdown pie chart, structured Gemini output, and trend comparisons against prior-month history
 - GitHub Actions cron deployment - runs every 3 days at 3 AM Mountain Time, fully unattended
 - Cache-based state persistence so cursors + summary state survive between cron runs
-- 34 passing unit tests
+- Sheets writes reuse one metadata fetch per transaction (~2 reads each) and retry with backoff on transient 429/5xx
+- 39 passing unit tests
 
 **Potential future work:**
 - Per-transaction category labeling in the sheet itself (not just in the monthly summary)
-- Per-table batching to reduce Sheets API chatter (currently ~3 metadata fetches per transaction)
+- Batch all of a run's writes into a single Sheets call to cut the write count further
 - Cross-year carryover automation
 
 **Limitations to be aware of:**
 - Gemini Free Tier has 30 RPM and 500 RPD limits. Typical daily volume uses far less than that, but a heavy backfill could hit the per-minute cap.
-- The Sheets API is chatty - ~3 calls per transaction. Fine for personal volumes (<100 tx/day); would need batching for higher volumes.
+- The Sheets API has a 60-requests-per-minute-per-user quota. The pipeline keeps reads to ~2 per transaction and retries with backoff on a 429, which comfortably covers personal volumes (<100 tx/day); a very large backfill in one run would still benefit from batching the writes.
 - The first call to Plaid `/transactions/sync` for a brand-new Item sometimes returns `added=[]` while Plaid does its background pull. Re-run after a minute and it catches up.
 - Cross-year carryover (Diciembre 2026 → Enero 2027) requires manually filling the January carryover row by hand the first time, since each year's transactions live in a separate spreadsheet.
 - GitHub Actions scheduled runs can drift by up to ~30 minutes during peak load (GitHub's own caveat). Not a problem for daily personal use.
