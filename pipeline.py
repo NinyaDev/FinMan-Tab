@@ -138,14 +138,17 @@ def main():
                 cleaned = clean_description(merchant = tx.name, amount = tx.amount, account = nickname, date = tx_date)
                 time.sleep(GEMINI_PACING)
                 
-                #3. Get/create month tab - uses tx.date, not today's date
-                tab = get_or_create_month_tab(sheets_service, spreadsheet_id, tx_date)
-                
+                #3. Get/create month tab - uses tx.date, not today's date.
+                # Reuse the metadata it returns for the table lookup and insert so
+                # each transaction costs one value read instead of re-fetching the
+                # whole spreadsheet 3+ times (the Sheets read-quota fix).
+                tab, sheet_metadata = get_or_create_month_tab(sheets_service, spreadsheet_id, tx_date)
+
                 # 4. Find the right table
-                table = find_table_in_tab(sheets_service, spreadsheet_id, tab["sheetId"], table_prefix) 
-                
+                table = find_table_in_tab(sheets_service, spreadsheet_id, tab["sheetId"], table_prefix, metadata=sheet_metadata)
+
                 # 5. Write to table
-                row = insert_transaction_into_table(sheets_service, spreadsheet_id, table, description = cleaned, amount = amount)
+                row = insert_transaction_into_table(sheets_service, spreadsheet_id, table, description = cleaned, amount = amount, metadata=sheet_metadata)
                 
                 log.info(
                     f" DONE {tx_date}{direction:7s} ${amount:>9.2f}"
