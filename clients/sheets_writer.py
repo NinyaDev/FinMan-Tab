@@ -5,12 +5,41 @@ Google sheets writer for the finance pipeline.
 """
 
 import logging
+import time
 from datetime import datetime
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from config import CONFIG
 from clients.google_auth import get_credentials
 
 log = logging.getLogger(__name__)
+
+# Google Sheets enforces 60 read and 60 write requests per minute per user. A
+# burst (e.g. creating a month tab + carryovers) can briefly cross that and
+# return HTTP 429. These statuses are transient, so we retry with exponential
+# backoff that escalates past the 60-second quota window (2+4+8+16+32 = 62s)
+# instead of letting one rate-limited call crash the whole bank's run.
+_RETRYABLE_STATUS = {429, 500, 503}
+_MAX_API_ATTEMPTS = 5
+_API_BASE_DELAY = 2
+
+
+def _execute_with_backoff(request):
+    # Execute a googleapiclient request, retrying transient errors with backoff.
+    for attempt in range(_MAX_API_ATTEMPTS):
+        try:
+            return request.execute()
+        except HttpError as e:
+            status = getattr(e.resp, "status", None)
+            if status in _RETRYABLE_STATUS and attempt < _MAX_API_ATTEMPTS - 1:
+                delay = _API_BASE_DELAY * (2 ** attempt)
+                log.warning(
+                    f"Sheets API returned {status}; retrying in {delay}s "
+                    f"(attempt {attempt + 1}/{_MAX_API_ATTEMPTS})"
+                )
+                time.sleep(delay)
+                continue
+            raise
 
 SPANISH_MONTHS = {
     1: "Enero",
@@ -73,7 +102,7 @@ def _prev_month_name(date_str: str) -> str:
 
 def _get_sheet_meta(service, spreadsheet_id: str, sheet_id: int) -> dict:
     # Return the sheet object (properties, tables, etc.) for a given sheet_id.
-    metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    metadata = _execute_with_backoff(service.spreadsheets().get(spreadsheetId=spreadsheet_id))
     for sheet in metadata["sheets"]:
         if sheet["properties"]["sheetId"] == sheet_id:
             return sheet
@@ -108,10 +137,10 @@ def _rename_tables_with_month(service, spreadsheet_id: str, sheet_id: int, month
                 break
 
     if requests:
-        service.spreadsheets().batchUpdate(
+        _execute_with_backoff(service.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": requests},
-        ).execute()
+        ))
         log.info(f"Renamed {len(requests)} tables in '{month_name}' tab")
 
 def _carry_over_balances(service, spreadsheet_id: str, new_sheet_id: int, date_str: str) -> None:
@@ -122,7 +151,7 @@ def _carry_over_balances(service, spreadsheet_id: str, new_sheet_id: int, date_s
     
     prev_month = _prev_month_name(date_str)
     
-    metadata = service.spreadsheets().get(spreadsheetId = spreadsheet_id).execute()
+    metadata = _execute_with_backoff(service.spreadsheets().get(spreadsheetId = spreadsheet_id))
     prior_sheet_id = next(
         (s["properties"]["sheetId"] for s in metadata["sheets"]
          if s["properties"]["title"] ==prev_month), None
@@ -150,12 +179,12 @@ def _apply_carryover_spec(service, spreadsheet_id, spec, prev_month, prior_sheet
         amount_col = _col_letter(prior_table["range"]["startColumnIndex"] +1)
         source_range = f"'{prev_month}'!{amount_col}{footer_row}"
 
-    result = service.spreadsheets().values().get(
+    result = _execute_with_backoff(service.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=source_range,
         valueRenderOption="UNFORMATTED_VALUE",
-    ).execute()
-    
+    ))
+
     values = result.get("values", [])
     if not values or not values[0] or values[0][0] in ("", None):
         log.info(f"Carryover source {source_range} is empty - skipping {prefix}")
@@ -171,7 +200,7 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
     target_name = _month_name_for_date(date)
     template_name = CONFIG["sheet"]["template_tab"]
     
-    metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    metadata = _execute_with_backoff(service.spreadsheets().get(spreadsheetId=spreadsheet_id))
     sheets = metadata["sheets"]
     
     # Look for existing tab with target name
@@ -200,7 +229,7 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
             }
         }]
     }
-    response = service.spreadsheets().batchUpdate(spreadsheetId = spreadsheet_id, body = request_body).execute()
+    response = _execute_with_backoff(service.spreadsheets().batchUpdate(spreadsheetId = spreadsheet_id, body = request_body))
 
     new_props = response["replies"][0]["duplicateSheet"]["properties"]
     new_sheet_id = new_props["sheetId"]
@@ -214,10 +243,10 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
             }
         }]
     }
-    service.spreadsheets().batchUpdate(
+    _execute_with_backoff(service.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body=visibility_request,
-    ).execute()
+    ))
 
     try:
         _rename_tables_with_month(service, spreadsheet_id, new_sheet_id, target_name)
@@ -270,10 +299,10 @@ def _extend_table_range(service, spreadsheet_id: str, table: dict, additional_ro
             "fields": "range",
         }
     }
-    service.spreadsheets().batchUpdate(
+    _execute_with_backoff(service.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={"requests": [request]},
-    ).execute()
+    ))
     log.info(
         f"Extended table '{table['name']}' by {additional_rows} rows "
         f"(end row {table['range']['endRowIndex']} -> {new_end})"
@@ -304,10 +333,10 @@ def _find_empty_data_row(service, spreadsheet_id: str, table: dict):
     desc_col = _col_letter(start_col)
     range_to_read = f"'{tab_name}'!{desc_col}{data_start}:{desc_col}{data_end}"
 
-    result = service.spreadsheets().values().get(
+    result = _execute_with_backoff(service.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=range_to_read,
-    ).execute()
+    ))
     values = result.get("values", [])
 
     for i in range(data_end - data_start + 1):
@@ -339,12 +368,12 @@ def insert_transaction_into_table(service, spreadsheet_id: str, table: dict, des
     tab_name = sheet["properties"]["title"]
 
     target_range = f"'{tab_name}'!{desc_col}{target_row}:{amount_col}{target_row}"
-    service.spreadsheets().values().update(
+    _execute_with_backoff(service.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
         range=target_range,
         valueInputOption="USER_ENTERED",
         body={"values": [[description, amount]]},
-    ).execute()
+    ))
 
     log.info(f"Wrote '{description}' (${amount}) to {tab_name}!{desc_col}{target_row}")
     return target_row
