@@ -5,12 +5,51 @@ Google sheets writer for the finance pipeline.
 """
 
 import logging
+import time
 from datetime import datetime
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from config import CONFIG
 from clients.google_auth import get_credentials
 
 log = logging.getLogger(__name__)
+
+# Google Sheets enforces 60 read and 60 write requests per minute per user. A
+# burst (e.g. creating a month tab + carryovers) can briefly cross that and
+# return HTTP 429. These statuses are transient, so we retry with exponential
+# backoff that escalates past the 60-second quota window (2+4+8+16+32 = 62s)
+# instead of letting one rate-limited call crash the whole bank's run.
+_RETRYABLE_STATUS = {429, 500, 503}
+_MAX_API_ATTEMPTS = 5
+_API_BASE_DELAY = 2
+
+# Master switch for the read-amplification + retry optimizations. Defaults on.
+# When False the module reverts to the pre-fix behavior: every helper refetches
+# the full spreadsheet metadata instead of reusing a passed-in copy, and a 429
+# is raised immediately with no retry. Tests flip this off to reproduce the
+# original throttling and prove the fix changes the outcome.
+SHEETS_OPTIMIZATIONS_ENABLED = True
+
+
+def _execute_with_backoff(request):
+    # Execute a googleapiclient request, retrying transient errors with backoff.
+    # With optimizations off we make a single attempt so a 429 propagates the
+    # same way it did before the fix.
+    attempts = _MAX_API_ATTEMPTS if SHEETS_OPTIMIZATIONS_ENABLED else 1
+    for attempt in range(attempts):
+        try:
+            return request.execute()
+        except HttpError as e:
+            status = getattr(e.resp, "status", None)
+            if status in _RETRYABLE_STATUS and attempt < attempts - 1:
+                delay = _API_BASE_DELAY * (2 ** attempt)
+                log.warning(
+                    f"Sheets API returned {status}; retrying in {delay}s "
+                    f"(attempt {attempt + 1}/{attempts})"
+                )
+                time.sleep(delay)
+                continue
+            raise
 
 SPANISH_MONTHS = {
     1: "Enero",
@@ -71,9 +110,13 @@ def _prev_month_name(date_str: str) -> str:
         prev_dt = dt.replace(month=dt.month - 1, day = 1)
     return _month_name_for_date(prev_dt.strftime("%Y-%m-%d"))
 
-def _get_sheet_meta(service, spreadsheet_id: str, sheet_id: int) -> dict:
+def _get_sheet_meta(service, spreadsheet_id: str, sheet_id: int, metadata: dict = None) -> dict:
     # Return the sheet object (properties, tables, etc.) for a given sheet_id.
-    metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    # When the caller already holds fresh spreadsheet metadata it can pass it in
+    # to avoid a redundant read request; otherwise we fetch it ourselves. With
+    # optimizations off we always refetch, reproducing the pre-fix read volume.
+    if metadata is None or not SHEETS_OPTIMIZATIONS_ENABLED:
+        metadata = _execute_with_backoff(service.spreadsheets().get(spreadsheetId=spreadsheet_id))
     for sheet in metadata["sheets"]:
         if sheet["properties"]["sheetId"] == sheet_id:
             return sheet
@@ -108,10 +151,10 @@ def _rename_tables_with_month(service, spreadsheet_id: str, sheet_id: int, month
                 break
 
     if requests:
-        service.spreadsheets().batchUpdate(
+        _execute_with_backoff(service.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={"requests": requests},
-        ).execute()
+        ))
         log.info(f"Renamed {len(requests)} tables in '{month_name}' tab")
 
 def _carry_over_balances(service, spreadsheet_id: str, new_sheet_id: int, date_str: str) -> None:
@@ -122,7 +165,7 @@ def _carry_over_balances(service, spreadsheet_id: str, new_sheet_id: int, date_s
     
     prev_month = _prev_month_name(date_str)
     
-    metadata = service.spreadsheets().get(spreadsheetId = spreadsheet_id).execute()
+    metadata = _execute_with_backoff(service.spreadsheets().get(spreadsheetId = spreadsheet_id))
     prior_sheet_id = next(
         (s["properties"]["sheetId"] for s in metadata["sheets"]
          if s["properties"]["title"] ==prev_month), None
@@ -150,12 +193,12 @@ def _apply_carryover_spec(service, spreadsheet_id, spec, prev_month, prior_sheet
         amount_col = _col_letter(prior_table["range"]["startColumnIndex"] +1)
         source_range = f"'{prev_month}'!{amount_col}{footer_row}"
 
-    result = service.spreadsheets().values().get(
+    result = _execute_with_backoff(service.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=source_range,
         valueRenderOption="UNFORMATTED_VALUE",
-    ).execute()
-    
+    ))
+
     values = result.get("values", [])
     if not values or not values[0] or values[0][0] in ("", None):
         log.info(f"Carryover source {source_range} is empty - skipping {prefix}")
@@ -165,21 +208,24 @@ def _apply_carryover_spec(service, spreadsheet_id, spec, prev_month, prior_sheet
     insert_transaction_into_table(service, spreadsheet_id, dest_table, description, amount)
     log.info(f"Carryover: '{description}' ${amount:.2f} -> {dest_table['name']}")
 
-def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
-    # If the tab already exists, return it. Otherwise duplicate template and rename duplicate to month name
-    
+def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> tuple:
+    # If the tab already exists, return it. Otherwise duplicate template and rename duplicate to month name.
+    # Returns (tab, metadata) where metadata is the full spreadsheet metadata consistent with the returned
+    # tab, so callers can reuse it for find_table/insert instead of issuing fresh read requests.
+
     target_name = _month_name_for_date(date)
     template_name = CONFIG["sheet"]["template_tab"]
-    
-    metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+
+    metadata = _execute_with_backoff(service.spreadsheets().get(spreadsheetId=spreadsheet_id))
     sheets = metadata["sheets"]
-    
+
     # Look for existing tab with target name
     for sheet in sheets:
         props = sheet["properties"]
         if props["title"] == target_name:
             logging.info(f"Found existing tab for {target_name}")
-            return {"title": props["title"], "sheetId": props["sheetId"]}
+            # Nothing mutated, so the metadata we just fetched is still valid to reuse.
+            return {"title": props["title"], "sheetId": props["sheetId"]}, metadata
     # Find the Template tab to duplicate from.
     template_id = None
     for sheet in sheets:
@@ -200,7 +246,7 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
             }
         }]
     }
-    response = service.spreadsheets().batchUpdate(spreadsheetId = spreadsheet_id, body = request_body).execute()
+    response = _execute_with_backoff(service.spreadsheets().batchUpdate(spreadsheetId = spreadsheet_id, body = request_body))
 
     new_props = response["replies"][0]["duplicateSheet"]["properties"]
     new_sheet_id = new_props["sheetId"]
@@ -214,10 +260,10 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
             }
         }]
     }
-    service.spreadsheets().batchUpdate(
+    _execute_with_backoff(service.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body=visibility_request,
-    ).execute()
+    ))
 
     try:
         _rename_tables_with_month(service, spreadsheet_id, new_sheet_id, target_name)
@@ -230,11 +276,15 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> dict:
         log.warning(f"Failed to carry over balances for '{target_name}' (continuing)", exc_info=True)
 
     log.info(f"Created tab '{target_name}' (sheet_id={new_sheet_id}) and made visible")
-    return {"title": new_props["title"], "sheetId": new_sheet_id}
+    # Creation renamed tables (and carryover may have extended one), so the
+    # metadata fetched at the top is stale. Re-fetch once here so the caller
+    # gets a copy consistent with the brand-new tab.
+    fresh_metadata = _execute_with_backoff(service.spreadsheets().get(spreadsheetId=spreadsheet_id))
+    return {"title": new_props["title"], "sheetId": new_sheet_id}, fresh_metadata
 
-def find_table_in_tab(service, spreadsheet_id: str, sheet_id: int, table_name_prefix: str) -> dict:
+def find_table_in_tab(service, spreadsheet_id: str, sheet_id: int, table_name_prefix: str, metadata: dict = None) -> dict:
     # Find a table within a specific tab by name prefix.
-    sheet = _get_sheet_meta(service, spreadsheet_id, sheet_id)
+    sheet = _get_sheet_meta(service, spreadsheet_id, sheet_id, metadata)
     tables = sheet.get("tables", [])
     for table in tables:
         if table["name"].startswith(table_name_prefix):
@@ -270,10 +320,10 @@ def _extend_table_range(service, spreadsheet_id: str, table: dict, additional_ro
             "fields": "range",
         }
     }
-    service.spreadsheets().batchUpdate(
+    _execute_with_backoff(service.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={"requests": [request]},
-    ).execute()
+    ))
     log.info(
         f"Extended table '{table['name']}' by {additional_rows} rows "
         f"(end row {table['range']['endRowIndex']} -> {new_end})"
@@ -287,7 +337,7 @@ def _extend_table_range(service, spreadsheet_id: str, table: dict, additional_ro
     raise RuntimeError(f"Table '{table['name']}' missing from sheet after extension")
 
 
-def _find_empty_data_row(service, spreadsheet_id: str, table: dict):
+def _find_empty_data_row(service, spreadsheet_id: str, table: dict, metadata: dict = None):
     # Scan the description column inside the table for the first blank row.
     # Returns the 1-indexed row number, or None if the table is full.
     sheet_id = table["range"]["sheetId"]
@@ -295,7 +345,7 @@ def _find_empty_data_row(service, spreadsheet_id: str, table: dict):
     end_row = table["range"]["endRowIndex"]
     start_col = table["range"]["startColumnIndex"]
 
-    sheet = _get_sheet_meta(service, spreadsheet_id, sheet_id)
+    sheet = _get_sheet_meta(service, spreadsheet_id, sheet_id, metadata)
     tab_name = sheet["properties"]["title"]
 
     data_start = start_row + 2
@@ -304,10 +354,10 @@ def _find_empty_data_row(service, spreadsheet_id: str, table: dict):
     desc_col = _col_letter(start_col)
     range_to_read = f"'{tab_name}'!{desc_col}{data_start}:{desc_col}{data_end}"
 
-    result = service.spreadsheets().values().get(
+    result = _execute_with_backoff(service.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
         range=range_to_read,
-    ).execute()
+    ))
     values = result.get("values", [])
 
     for i in range(data_end - data_start + 1):
@@ -316,35 +366,40 @@ def _find_empty_data_row(service, spreadsheet_id: str, table: dict):
     return None
 
 
-def insert_transaction_into_table(service, spreadsheet_id: str, table: dict, description: str, amount: float) -> int:
+def insert_transaction_into_table(service, spreadsheet_id: str, table: dict, description: str, amount: float, metadata: dict = None) -> int:
     """Write transaction to first empty row in table; returns 1-indexed row written.
 
     Auto-extends the table by _TABLE_EXTEND_ROWS when full, then retries the
     empty-row scan once. The retry should always succeed because the extension
     claims previously-blank cells; a second failure means something deeper is
     wrong with the sheet and we surface it as a RuntimeError.
+
+    metadata, when supplied, is reused for the tab-name lookups so a normal
+    insert costs one value read instead of three full metadata fetches. It is
+    only ever read for the tab title, which never changes within a transaction,
+    so it stays valid even after an auto-extension.
     """
-    target_row = _find_empty_data_row(service, spreadsheet_id, table)
+    target_row = _find_empty_data_row(service, spreadsheet_id, table, metadata)
     if target_row is None:
         log.info(f"Table '{table['name']}' is full; auto-extending")
         table = _extend_table_range(service, spreadsheet_id, table, _TABLE_EXTEND_ROWS)
-        target_row = _find_empty_data_row(service, spreadsheet_id, table)
+        target_row = _find_empty_data_row(service, spreadsheet_id, table, metadata)
         if target_row is None:
             raise RuntimeError(f"Table '{table['name']}' still full after extension")
 
     start_col = table["range"]["startColumnIndex"]
     desc_col = _col_letter(start_col)
     amount_col = _col_letter(start_col + 1)
-    sheet = _get_sheet_meta(service, spreadsheet_id, table["range"]["sheetId"])
+    sheet = _get_sheet_meta(service, spreadsheet_id, table["range"]["sheetId"], metadata)
     tab_name = sheet["properties"]["title"]
 
     target_range = f"'{tab_name}'!{desc_col}{target_row}:{amount_col}{target_row}"
-    service.spreadsheets().values().update(
+    _execute_with_backoff(service.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
         range=target_range,
         valueInputOption="USER_ENTERED",
         body={"values": [[description, amount]]},
-    ).execute()
+    ))
 
     log.info(f"Wrote '{description}' (${amount}) to {tab_name}!{desc_col}{target_row}")
     return target_row
@@ -356,7 +411,7 @@ if __name__ == "__main__":
     service = build('sheets', 'v4', credentials=creds)
     spreadsheet_id = CONFIG["sheet"]["spreadsheet_id"]
     # Test with today's date
-    mayo = get_or_create_month_tab(service, spreadsheet_id, "2026-05-06")
+    mayo, _ = get_or_create_month_tab(service, spreadsheet_id, "2026-05-06")
     print(f"\nLooking up tables in '{mayo['title']}' (sheet_id={mayo['sheetId']}):\n")
     
     for prefix in sorted(_all_configured_prefixes()):
