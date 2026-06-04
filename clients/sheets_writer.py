@@ -23,19 +23,29 @@ _RETRYABLE_STATUS = {429, 500, 503}
 _MAX_API_ATTEMPTS = 5
 _API_BASE_DELAY = 2
 
+# Master switch for the read-amplification + retry optimizations. Defaults on.
+# When False the module reverts to the pre-fix behavior: every helper refetches
+# the full spreadsheet metadata instead of reusing a passed-in copy, and a 429
+# is raised immediately with no retry. Tests flip this off to reproduce the
+# original throttling and prove the fix changes the outcome.
+SHEETS_OPTIMIZATIONS_ENABLED = True
+
 
 def _execute_with_backoff(request):
     # Execute a googleapiclient request, retrying transient errors with backoff.
-    for attempt in range(_MAX_API_ATTEMPTS):
+    # With optimizations off we make a single attempt so a 429 propagates the
+    # same way it did before the fix.
+    attempts = _MAX_API_ATTEMPTS if SHEETS_OPTIMIZATIONS_ENABLED else 1
+    for attempt in range(attempts):
         try:
             return request.execute()
         except HttpError as e:
             status = getattr(e.resp, "status", None)
-            if status in _RETRYABLE_STATUS and attempt < _MAX_API_ATTEMPTS - 1:
+            if status in _RETRYABLE_STATUS and attempt < attempts - 1:
                 delay = _API_BASE_DELAY * (2 ** attempt)
                 log.warning(
                     f"Sheets API returned {status}; retrying in {delay}s "
-                    f"(attempt {attempt + 1}/{_MAX_API_ATTEMPTS})"
+                    f"(attempt {attempt + 1}/{attempts})"
                 )
                 time.sleep(delay)
                 continue
@@ -103,8 +113,9 @@ def _prev_month_name(date_str: str) -> str:
 def _get_sheet_meta(service, spreadsheet_id: str, sheet_id: int, metadata: dict = None) -> dict:
     # Return the sheet object (properties, tables, etc.) for a given sheet_id.
     # When the caller already holds fresh spreadsheet metadata it can pass it in
-    # to avoid a redundant read request; otherwise we fetch it ourselves.
-    if metadata is None:
+    # to avoid a redundant read request; otherwise we fetch it ourselves. With
+    # optimizations off we always refetch, reproducing the pre-fix read volume.
+    if metadata is None or not SHEETS_OPTIMIZATIONS_ENABLED:
         metadata = _execute_with_backoff(service.spreadsheets().get(spreadsheetId=spreadsheet_id))
     for sheet in metadata["sheets"]:
         if sheet["properties"]["sheetId"] == sheet_id:
