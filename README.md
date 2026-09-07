@@ -18,6 +18,11 @@ Built around an existing personal-finance spreadsheet rather than replacing it: 
 <p align="center"><sub><b>Pipeline running in GitHub Actions</b> - Mayo tab auto-created, carryover written, 21 transactions cleaned by Gemini and routed to the right tables.</sub></p>
 
 <p align="center">
+  <img src="docs/images/monthly-summary.png" alt="June monthly summary email showing net balance, spending by category, top merchants, and observations" width="731">
+</p>
+<p align="center"><sub><b>Monthly financial summary email</b> - Category breakdown, top merchants, and observations generated from the month's transactions.</sub></p>
+
+<p align="center">
   <sub><i>Mayo tab in Google Sheets - placeholder, screenshot coming soon</i></sub>
 </p>
 
