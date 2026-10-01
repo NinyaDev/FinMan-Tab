@@ -1,5 +1,7 @@
 # Finance Manager
 
+Personal production runs are hosted in a separate private repository. This public repository runs tests with example configuration only. See [deployment privacy](docs/deployment-privacy.md) before connecting real accounts.
+
 A Python pipeline that pulls bank transactions through **Plaid**, cleans the merchant descriptions through **Google Gemini Flash** (in your own voice via few-shot prompting), and writes them into the right table of the right tab in **your own Google Sheet**. At the start of every month it sends you an HTML email summary of the prior month with an LLM-generated commentary and a category breakdown pie chart. Runs unattended on a free-tier GitHub Actions cron.
 
 Built around an existing personal-finance spreadsheet rather than replacing it: month tabs, structured tables, running balances, and TOTAL formulas all keep working. The pipeline is config-driven and fork-friendly - your account IDs, your tab names, and your prompt examples live in a few YAML files, not in the code.
@@ -30,13 +32,13 @@ Built around an existing personal-finance spreadsheet rather than replacing it: 
 
 ## Features
 
-- **Bank ingest via Plaid `/transactions/sync`:** incremental, cursor-based fetch - each run only sees transactions that posted since the previous run. No duplicates, no manual de-dup logic.
+- **Bank ingest via Plaid `/transactions/sync`:** incremental, cursor-based fetch - each run only sees transactions that posted since the previous run. Completed bank syncs advance their cursor; partial failures require reconciliation before replay.
 - **Spanglish description cleaning via Gemini 3.1 Flash Lite:** few-shot prompted with ~20 of your own real descriptions, so output stays in your voice (`"Walmart - Groceries"`, `"Gas en Chevron"`, `"Paycheck from Student Job"`). Fail-soft - if Gemini is overloaded for a transaction, the raw merchant string lands in the sheet so nothing is ever lost.
 - **Date-driven tab routing:** uses `tx.date` (not `today`) so a cron at 12:01 AM on June 1 still files May 30 transactions into Mayo, not Junio.
 - **Auto-creates new month tabs from a hidden Template:** duplicates the Template, makes the new tab visible, renames every table inside it to `<prefix><MonthName>` for cleanliness.
 - **Configurable balance carryover:** writes a starting-balance row at the top of each new month tab - pulled either from a specific cell in the prior tab (e.g. running balance) or the prior month's table footer (e.g. credit-card total).
 - **Monthly summary email:** on the first run of each new month, Gemini analyzes the prior month's transactions and produces a structured summary (net, top merchants, spend-by-category, observations, commentary). An HTML email with an embedded pie chart (via QuickChart.io) lands in your inbox. State persists across runs so each month is summarized exactly once, with prior-month context fed into Gemini for trend comparisons.
-- **Idempotent and crash-safe:** Plaid cursors persist per-bank to `access_tokens.json` only after the bank's transaction loop fully succeeds, so a mid-run failure retries cleanly on the next run. The summary state file works the same way - only marks a month as summarized after the email send succeeds.
+- **Idempotent and crash-safe:** Plaid cursors persist per-bank to `access_tokens.json` only after the bank's transaction loop fully succeeds, so a mid-run failure retains the previous cursor. Rows written before that failure may be replayed; reconcile partial writes before retrying. The summary state file works the same way - only marks a month as summarized after the email send succeeds.
 - **Rate-limit resilient Sheets writes:** each transaction reuses one spreadsheet metadata fetch instead of re-reading it 3+ times (~5 reads down to ~2), and every Sheets call retries with exponential backoff on a transient 429/5xx, so a quota burst during month-tab creation waits out the window instead of crashing the run.
 - **Optional first-sync date filter:** ignore historical transactions on the very first run via `pipeline.start_date` in `config.yaml`. Doesn't affect any future run.
 - **Single-process, no database, no server:** state lives in JSON / YAML files; runs as a single Python script on a free-tier GitHub Actions cron every 3 days at 3 AM Mountain Time.
@@ -231,7 +233,7 @@ pipeline:
 │   ├── test_sheets_throttle.py     # read-quota A/B + backoff retry against a fake Sheets service
 │   └── test_insights.py            # summary state + categorize + email body + chart URL
 ├── .github/workflows/
-│   └── cron.yml            # Daily GitHub Actions cron + state-file caching
+│   └── pr.yml              # Public tests using example configuration
 ├── prompts.yaml            # Gemini prompt templates + few-shot examples (cleaner + summary)
 ├── config.example.yaml     # Config template for forks
 ├── .env.example            # Env-var template for forks
@@ -258,11 +260,11 @@ python -m unittest discover tests
 
 **Currently shipped:**
 - Plaid → Gemini → Sheets pipeline runs end-to-end and is verified live in production
-- Cursor-based incremental sync (idempotent reruns)
+- Cursor-based incremental sync after successful bank processing
 - Month-tab auto-creation with table rename + balance carryover
 - Monthly summary email with category breakdown pie chart, structured Gemini output, and trend comparisons against prior-month history
 - GitHub Actions cron deployment - runs every 3 days at 3 AM Mountain Time, fully unattended
-- Cache-based state persistence so cursors + summary state survive between cron runs
+- Private deployment preserves cursors and summary history in encrypted storage; credentials are never cached
 - Sheets writes reuse one metadata fetch per transaction (~2 reads each) and retry with backoff on transient 429/5xx
 - 39 passing unit tests
 

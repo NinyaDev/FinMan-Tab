@@ -247,11 +247,7 @@ def _summarize_transactions(transactions: list[dict], month_name: str, prior_sum
         config=config,
     )
     summary = json.loads(response.text)
-    log.info(
-        f"Summary received: income ${summary['total_income']:.2f}, "
-        f"expenses ${summary['total_expenses']:.2f}, "
-        f"net ${summary['net']:.2f}"
-    )
+    log.info("Monthly summary generated")
     return summary
 
 
@@ -386,7 +382,7 @@ def maybe_send_monthly_summary(creds, today: date | None = None) -> str | None:
         subject=f"Finance Manager - {month_name} Summary - Net ${summary['net']:.2f}",
         html_body=html_body,
     )
-    log.info(f"Sent {month_name} summary email. Message ID: {msg_id}")
+    log.info("Monthly summary email sent")
 
     # Persist state ONLY after successful send.
     state["last_summarized"] = target_month

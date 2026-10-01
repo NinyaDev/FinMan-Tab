@@ -128,7 +128,7 @@ def main():
                 # 1. Routing
                 routing = route_transaction(tx, account_routing)
                 if routing is None:
-                    log.info(f" Skipping unmapped account_id={tx.account_id} (vault?)")
+                    log.info("Skipping unmapped account")
                     total_skipped +=1
                     continue
                 bank, table_prefix, direction, amount = routing
@@ -150,10 +150,7 @@ def main():
                 # 5. Write to table
                 row = insert_transaction_into_table(sheets_service, spreadsheet_id, table, description = cleaned, amount = amount, metadata=sheet_metadata)
                 
-                log.info(
-                    f" DONE {tx_date}{direction:7s} ${amount:>9.2f}"
-                    f" -> {tab['title']}/{table['name']} row{row}"
-                )
+                log.info("Transaction written successfully")
                 total_processed +=1
         
             # Save cursor only after the bank's full tx loops succeeds.
@@ -176,10 +173,10 @@ def main():
                     nickname, code
                 )
             else:
-                log.exception("Plaid API error for %s (error_code=%s)", nickname, code)
+                log.error("Plaid API error for %s (error_code=%s)", nickname, code)
             bank_errors.append((nickname, f"Plaid {code}"))
         except Exception as e:
-            log.exception(f"Error processing {nickname}")
+            log.error("Bank sync failed (%s)", type(e).__name__)
             bank_errors.append((nickname, type(e).__name__))
         print()
         
@@ -190,8 +187,8 @@ def main():
     # The orchestrator self-recovers by retrying on the next daily run.
     try:
         maybe_send_monthly_summary(creds)
-    except Exception:
-        log.exception("Monthly summary failed (pipeline continues normally)")
+    except Exception as e:
+        log.error("Monthly summary failed (%s); will retry next run", type(e).__name__)
 
     # Exit non-zero if any bank had an error so the GitHub Actions run goes red
     # and the failure email actually fires. Successful banks have already
@@ -207,4 +204,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        log.error("Pipeline failed (%s). Inspect credentials and configuration privately.", type(exc).__name__)
+        raise SystemExit(1) from None

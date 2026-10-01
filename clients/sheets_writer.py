@@ -178,7 +178,7 @@ def _carry_over_balances(service, spreadsheet_id: str, new_sheet_id: int, date_s
         try:
             _apply_carryover_spec(service, spreadsheet_id, spec, prev_month, prior_sheet_id, new_sheet_id)
         except Exception:
-            log.warning(f"Carryover failed for {spec.get('prefix','?')}", exc_info=True)
+            log.warning(f"Carryover failed for {spec.get('prefix','?')}")
 
 def _apply_carryover_spec(service, spreadsheet_id, spec, prev_month, prior_sheet_id, new_sheet_id):
     prefix = spec["prefix"]
@@ -206,7 +206,7 @@ def _apply_carryover_spec(service, spreadsheet_id, spec, prev_month, prior_sheet
     amount = round(float(values[0][0]), 2)
     dest_table = find_table_in_tab(service, spreadsheet_id, new_sheet_id, prefix)
     insert_transaction_into_table(service, spreadsheet_id, dest_table, description, amount)
-    log.info(f"Carryover: '{description}' ${amount:.2f} -> {dest_table['name']}")
+    log.info("Balance carryover written")
 
 def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> tuple:
     # If the tab already exists, return it. Otherwise duplicate template and rename duplicate to month name.
@@ -268,14 +268,14 @@ def get_or_create_month_tab(service, spreadsheet_id: str, date: str) -> tuple:
     try:
         _rename_tables_with_month(service, spreadsheet_id, new_sheet_id, target_name)
     except Exception:
-        log.warning(f"Failed to rename tables in '{target_name}' (continuing)", exc_info=True)
+        log.warning(f"Failed to rename tables in '{target_name}' (continuing)")
 
     try:
         _carry_over_balances(service, spreadsheet_id, new_sheet_id, date)
     except Exception:
-        log.warning(f"Failed to carry over balances for '{target_name}' (continuing)", exc_info=True)
+        log.warning(f"Failed to carry over balances for '{target_name}' (continuing)")
 
-    log.info(f"Created tab '{target_name}' (sheet_id={new_sheet_id}) and made visible")
+    log.info("Created monthly tab and made visible")
     # Creation renamed tables (and carryover may have extended one), so the
     # metadata fetched at the top is stale. Re-fetch once here so the caller
     # gets a copy consistent with the brand-new tab.
@@ -401,7 +401,7 @@ def insert_transaction_into_table(service, spreadsheet_id: str, table: dict, des
         body={"values": [[description, amount]]},
     ))
 
-    log.info(f"Wrote '{description}' (${amount}) to {tab_name}!{desc_col}{target_row}")
+    log.info("Transaction written successfully")
     return target_row
 
 if __name__ == "__main__":

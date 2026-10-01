@@ -69,14 +69,14 @@ def clean_description(merchant: str, amount: float, account: str, date: str) -> 
         except (genai_errors.ServerError, genai_errors.ClientError) as e:
             if attempt < MAX_RETRIES - 1:
                 delay = RETRIES_BASE_DELAY * (2 ** attempt)  # Exponential backoff
-                log.warning(f"Gemini API error: {e}. Retrying in {delay} seconds...")
+                log.warning("Gemini request failed; retrying in %s seconds", delay)
                 time.sleep(delay)
                 continue
             #Last attempt failed
-            log.exception(f"Gemini failed after {MAX_RETRIES} attempts for '{merchant}'")
+            log.error("Gemini failed after %s attempts; using original description", MAX_RETRIES)
             return merchant
         except Exception:
-            log.exception(f"Non-Gemini error for '{merchant}'")
+            log.error("Description cleanup failed; using original description")
             return merchant
     return merchant # Fallback
     
