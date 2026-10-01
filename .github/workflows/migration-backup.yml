@@ -1,0 +1,60 @@
+name: Encrypted migration backup
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache/restore@v4
+        id: state
+        with:
+          path: |
+            access_tokens.json
+            token.json
+            summary_state.json
+          key: fm-state-36453266278
+          fail-on-cache-miss: true
+      - run: python -m pip install cryptography
+      - name: Encrypt state and configuration with migration public key
+        env:
+          CONFIG_YAML: ${{ secrets.CONFIG_YAML }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+          PLAID_ACCESS_TOKENS_JSON: ${{ secrets.PLAID_ACCESS_TOKENS_JSON }}
+          PLAID_CLIENT_ID: ${{ secrets.PLAID_CLIENT_ID }}
+          PLAID_PRODUCTION_SECRET: ${{ secrets.PLAID_PRODUCTION_SECRET }}
+          SUMMARY_STATE_JSON: ${{ secrets.SUMMARY_STATE_JSON }}
+        run: |
+          python - <<'PYBACKUP'
+          import os, json, base64
+          from pathlib import Path
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import padding
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          names = ['CONFIG_YAML','GEMINI_API_KEY','GOOGLE_CREDENTIALS_JSON','GOOGLE_TOKEN_JSON','PLAID_ACCESS_TOKENS_JSON','PLAID_CLIENT_ID','PLAID_PRODUCTION_SECRET','SUMMARY_STATE_JSON']
+          files = {name: Path(name).read_text() for name in ['access_tokens.json','token.json','summary_state.json']}
+          assert json.loads(files['access_tokens.json']), 'Missing bank state'
+          secrets = {name: os.environ[name] for name in names}
+          assert all(secrets[n] for n in names if n != 'SUMMARY_STATE_JSON'), 'Missing required configuration'
+          data = json.dumps({'files': files, 'secrets': secrets}).encode()
+          public = serialization.load_pem_public_key(base64.b64decode('LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQm9qQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FZOEFNSUlCaWdLQ0FZRUE1NzhsbEllVGVIREU2UklibFk0eQpkYnQ5ejNHVFVUZit0N21zeXF5MFh2MUpJcTdoNFZHMUZmbGNhK0lYZ3VvRXJyOUhvdjc0QmpUTncxMnM5V0kzCnRkaG1vbjNZd0tWUm9xOStRNjkrYjVnM3FRVlZzUFg0Z0lMVGNTTW5rajgzTEZVY3htWDA0ZDV1Tjg2UXc3REgKWXVBdVdqOWsvaEFGZDBjVVZxVXQwbGVIYktiZVlLZGduNnVjZzQ0M28zMnJDRHA2V1ZVbmxJMFd0Z2s5MTVIdApFcUtBK0pic0ZVaC9uTnNXMWlkSlJZK1JNMEZ5RUFHdEtrMWw4TWFHSHlNczJpcGlLV3J0SHdXZGluWjhxYjlmCnhSNjVoZWgxS09kczhRRDhXTVpobGpvTzVsTkJJUzhHclFNYlRmZk9YYjNQa1JzQlhSUXo0S0dKZEpmaXBQQkgKcFFWRmRWNkVHYVdjRDlKQU5LOGN3dzNPOFAyZEYva3ZNTms1VVBXUGtUTDdVL3pINWJTUFg0dUEyTEhxTlB2OAorcUJkZUZaNTJLTVdlejRRdFZIVnlldnVKclFwcU5tb3NNTnZnUDVnSktOY2E4YjR4aVNrS1ZKM0YxYWNSTDhjCkZnN0VqTzRsVDgrc2p1Ykkxejh6OWtNa2N2ZGkvdFh2bndLUEJPSFJ1QjkvQWdNQkFBRT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg=='))
+          key = AESGCM.generate_key(bit_length=256)
+          nonce = os.urandom(12)
+          wrapped = public.encrypt(key, padding.OAEP(mgf=padding.MGF1(hashes.SHA256()),algorithm=hashes.SHA256(),label=None))
+          ciphertext = AESGCM(key).encrypt(nonce, data, b'finance-migration-v1')
+          Path('backup.encrypted.json').write_text(json.dumps({k:base64.b64encode(v).decode() for k,v in {'key':wrapped,'nonce':nonce,'ciphertext':ciphertext}.items()}))
+          print('Encrypted migration backup created.')
+          PYBACKUP
+      - uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-migration-backup
+          path: backup.encrypted.json
+          retention-days: 1
+          if-no-files-found: error
