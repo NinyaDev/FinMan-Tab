@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f0e7">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Margin">
+  <title>Margin — spending at a glance</title>
+  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='journal.css') }}">
+</head>
+<body><div class="page">
+<header>
+  <a class="wordmark" href="/">m<span> / </span>margin</a>
+  {% if data.demo %}<span class="mode">SAMPLE DATA</span>{% endif %}
+  {% if sheet_url %}<a class="sheet-link" href="{{ sheet_url }}" target="_blank" rel="noopener noreferrer">Open Sheets ↗</a>{% endif %}
+</header>
+<main>
+  <div class="period">
+    <h1>Monthly spending</h1>
+    <form method="get" class="month-picker">
+      <label class="visually-hidden" for="month">Month</label>
+      <select id="month" name="month">
+        {% for m in months %}<option value="{{ m }}" {{ 'selected' if m == month else '' }}>{{ m | month_label }}</option>{% endfor %}
+      </select>
+      <input type="hidden" name="account" value="{{ account }}">
+      <input type="hidden" name="q" value="{{ query }}">
+      <button type="submit">Go</button>
+    </form>
+  </div>
+  <section class="overview" aria-label="Monthly spending">
+    <div class="main-total">
+      <p class="eyebrow">{{ account or 'All accounts' }}{% if totals.review %} · Partial total{% endif %}</p>
+      <h2>{{ totals.spending | money }}</h2>
+      <p>Purchases minus refunds</p>
+    </div>
+    <div class="detail-total"><span>Rewards & credits</span><strong>{{ totals.rewards | money }}</strong></div>
+    <div class="detail-total"><span>Needs review</span><strong>{{ totals.review }} <small>entries</small></strong></div>
+  </section>
+  <div class="freshness">
+    <span>{{ 'Sample snapshot' if data.demo else 'Sheet read' }} · <time>{{ data.updated_at }}</time></span>
+    <a href="{{ url_for('journal', month=month, account=account, q=query) }}">Refresh ↻</a>
+  </div>
+  {% if totals.review %}<p class="review-note">{{ totals.review }} unclassified {{ 'entry is' if totals.review == 1 else 'entries are' }} excluded from this total.</p>{% endif %}
+  <nav class="accounts" aria-label="Filter by account">
+    <a class="all {{ 'active' if not account else '' }}" {% if not account %}aria-current="page"{% endif %} href="{{ url_for('journal', month=month, q=query) }}">All accounts</a>
+    {% for card in cards %}
+    <a class="card {{ 'active' if account == card.name else '' }}" {% if account == card.name %}aria-current="page"{% endif %} href="{{ url_for('journal', month=month, account=card.name, q=query) }}">
+      <span>{{ card.name }}{% if card.review %}<span class="review-dot" title="Includes unclassified entries">*</span>{% endif %}</span>
+      <strong>{{ card.spending | money }}</strong>
+    </a>
+    {% endfor %}
+  </nav>
+  <section class="activity" aria-label="Transactions">
+    <div class="section-title">
+      <h2>Transactions <span>{{ transactions | length }}</span></h2>
+      <form class="search" method="get">
+        <input type="hidden" name="month" value="{{ month }}">
+        <input type="hidden" name="account" value="{{ account }}">
+        <label class="visually-hidden" for="search">Search transactions</label>
+        <input id="search" type="search" name="q" value="{{ query }}" placeholder="Find a transaction…">
+        <button type="submit">Find</button>
+      </form>
+    </div>
+    {% for tx in transactions %}
+    <article class="transaction">
+      <div class="when"><time>{{ tx.date[5:] if tx.date else 'Month only' }}</time><span>{{ tx.account }}</span></div>
+      <div class="merchant"><h3>{{ tx.description }}</h3><span class="kind {{ tx.kind }}">{{ 'Needs review' if tx.kind == 'unclassified' else tx.kind | title }}</span></div>
+      <strong class="amount {{ 'credit' if tx.cents < 0 else '' }}">{{ tx.cents | money }}</strong>
+    </article>
+    {% else %}<p class="empty">No transactions here. Try another account, month, or search.</p>{% endfor %}
+  </section>
+</main>
+<footer>
+  <span>Read here. Edit in Sheets.<br>Transfers and card payments don’t count as spending.</span>
+  <details class="access"><summary>Keep Margin handy ↗</summary><p>Once privately hosted, add Margin to your iPhone Home Screen or your Mac Dock from Safari.</p><p>This local preview runs only on your computer. It is not a live widget.</p></details>
+</footer>
+</div></body></html>

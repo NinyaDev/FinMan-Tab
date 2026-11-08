@@ -1,0 +1,199 @@
+{
+  "demo": true,
+  "updated_at": "2026-11-07T08:17:00Z",
+  "sheet_url": "",
+  "tables": [
+    {
+      "account": "Amex",
+      "month": "2026-11",
+      "rows": [
+        [
+          "Dinner with friends",
+          64.8
+        ],
+        [
+          "Books for class",
+          48
+        ],
+        [
+          "Weekend groceries",
+          86.42
+        ]
+      ],
+      "details": {
+        "0": {
+          "id": "demo:Amex:2026-11:0",
+          "kind": "purchase",
+          "date": "2026-11-06"
+        },
+        "1": {
+          "id": "demo:Amex:2026-11:1",
+          "kind": "purchase",
+          "date": "2026-11-04"
+        },
+        "2": {
+          "id": "demo:Amex:2026-11:2",
+          "kind": "purchase",
+          "date": "2026-11-02"
+        }
+      }
+    },
+    {
+      "account": "OnePay",
+      "month": "2026-11",
+      "rows": [
+        [
+          "Groceries \u2022 weekly shop",
+          72.38
+        ],
+        [
+          "Points redeemed",
+          -10
+        ],
+        [
+          "Returned headphones",
+          -24.99
+        ],
+        [
+          "Desk supplies",
+          39.5
+        ],
+        [
+          "Payment from SoFi",
+          -150
+        ]
+      ],
+      "details": {
+        "0": {
+          "id": "demo:OnePay:2026-11:0",
+          "kind": "purchase",
+          "date": "2026-11-07"
+        },
+        "1": {
+          "id": "demo:OnePay:2026-11:1",
+          "kind": "reward",
+          "date": "2026-11-05"
+        },
+        "2": {
+          "id": "demo:OnePay:2026-11:2",
+          "kind": "refund",
+          "date": "2026-11-04"
+        },
+        "3": {
+          "id": "demo:OnePay:2026-11:3",
+          "kind": "purchase",
+          "date": "2026-11-03"
+        },
+        "4": {
+          "id": "demo:OnePay:2026-11:4",
+          "kind": "payment",
+          "date": "2026-11-02"
+        }
+      }
+    },
+    {
+      "account": "SoFi",
+      "month": "2026-11",
+      "rows": [
+        [
+          "Coffee before class",
+          6.25
+        ],
+        [
+          "Paycheck",
+          -950
+        ],
+        [
+          "Payment to OnePay",
+          150
+        ],
+        [
+          "Bank description to review",
+          18.2
+        ]
+      ],
+      "details": {
+        "0": {
+          "id": "demo:SoFi:2026-11:0",
+          "kind": "purchase",
+          "date": "2026-11-07"
+        },
+        "1": {
+          "id": "demo:SoFi:2026-11:1",
+          "kind": "income",
+          "date": "2026-11-06"
+        },
+        "2": {
+          "id": "demo:SoFi:2026-11:2",
+          "kind": "transfer",
+          "date": "2026-11-02"
+        },
+        "3": {
+          "id": "demo:SoFi:2026-11:3",
+          "kind": "unclassified",
+          "date": "2026-11-01"
+        }
+      }
+    },
+    {
+      "account": "Discover",
+      "month": "2026-11",
+      "rows": [
+        [
+          "Gas on the way home",
+          42.1
+        ],
+        [
+          "Music subscription",
+          11.99
+        ]
+      ],
+      "details": {
+        "0": {
+          "id": "demo:Discover:2026-11:0",
+          "kind": "purchase",
+          "date": "2026-11-06"
+        },
+        "1": {
+          "id": "demo:Discover:2026-11:1",
+          "kind": "purchase",
+          "date": "2026-11-01"
+        }
+      }
+    },
+    {
+      "account": "OnePay",
+      "month": "2026-10",
+      "rows": [
+        [
+          "October groceries",
+          122.75
+        ]
+      ],
+      "details": {
+        "0": {
+          "id": "demo:OnePay:2026-10:0",
+          "kind": "purchase",
+          "date": "2026-10-28"
+        }
+      }
+    },
+    {
+      "account": "SoFi",
+      "month": "2026-10",
+      "rows": [
+        [
+          "Lunch on campus",
+          14.5
+        ]
+      ],
+      "details": {
+        "0": {
+          "id": "demo:SoFi:2026-10:0",
+          "kind": "purchase",
+          "date": "2026-10-30"
+        }
+      }
+    }
+  ]
+}

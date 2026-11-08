@@ -33,6 +33,12 @@ llm:
   retry_base_delay: 2
 
 pipeline:
+  # Opt in only after reconciling existing rows and testing a disposable Sheet.
+  # Keeps transaction identity with its row; no new local cursor store.
+  track_transaction_ids: false
+  # Enable one newly connected bank without migrating existing bank rows.
+  tracked_banks: []             # e.g. [amex]
+  bank_start_dates: {}          # e.g. {amex: "2026-11-01"}; also excludes later historical updates
   max_tx_per_bank: null          # null = no cap; integer = cap per run (dev / dry run)
   pacing_second: 0.5
   start_date: null               # null = no filter; "YYYY-MM-DD" to skip historical tx on first sync

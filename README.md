@@ -1,5 +1,10 @@
 # Finance Manager
 
+Local development now includes opt-in transaction identity tracking, isolated bank
+onboarding, and a read-only Sheets viewer. See [safe rollout and offline tests](docs/safe-rollout.md).
+Preview the synthetic viewer with `.venv/bin/python -m viewer.app`; production
+configuration and the private runner remain unchanged until a reviewed rollout.
+
 Personal production runs are hosted in a separate private repository. This public repository runs tests with example configuration only. See [deployment privacy](docs/deployment-privacy.md) before connecting real accounts.
 
 A Python pipeline that pulls bank transactions through **Plaid**, cleans the merchant descriptions through **Google Gemini Flash** (in your own voice via few-shot prompting), and writes them into the right table of the right tab in **your own Google Sheet**. At the start of every month it sends you an HTML email summary of the prior month with an LLM-generated commentary and a category breakdown pie chart. Runs unattended on a free-tier GitHub Actions cron.
