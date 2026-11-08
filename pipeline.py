@@ -84,7 +84,7 @@ def route_transaction(tx, account_routing):
     
     return routing["bank"], table_prefix, direction, amount
 
-def main():
+def main(only_banks=None, send_summary=True):
     plaid_client = get_client(env="production")
     creds = get_credentials()
     sheets_service = build("sheets", "v4", credentials=creds)
@@ -92,6 +92,8 @@ def main():
     spreadsheet_id = CONFIG["sheet"]["spreadsheet_id"]
     account_routing = CONFIG["account_routing"]
     tokens = load_tokens()
+    if only_banks and not set(only_banks).issubset(tokens):
+        raise ValueError("Requested bank is not configured")
     
     if not tokens:
         log.error("No access tokens found. Please run setup/link_banks.py first.")
@@ -108,6 +110,8 @@ def main():
     bank_errors = []
 
     for nickname, token_data in tokens.items():
+        if only_banks and nickname not in only_banks:
+            continue
         access_token = token_data["access_token"]
         prior_cursor = token_data.get("cursor", "")
         log.info(f"Syncing {nickname} (cursor={'<empty, first run>' if not prior_cursor else 'set'})...")
@@ -222,7 +226,8 @@ def main():
     # Monthly summary attempt - non-critical; failures must not crash the pipeline.
     # The orchestrator self-recovers by retrying on the next daily run.
     try:
-        maybe_send_monthly_summary(creds)
+        if send_summary:
+            maybe_send_monthly_summary(creds)
     except Exception as e:
         log.error("Monthly summary failed (%s); will retry next run", type(e).__name__)
 
@@ -240,8 +245,13 @@ def main():
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--bank', action='append', help='Sync only this bank; preserve all other cursors')
+    parser.add_argument('--skip-summary', action='store_true', help='Do not send a monthly summary')
+    args = parser.parse_args()
     try:
-        main()
+        main(only_banks=args.bank, send_summary=not args.skip_summary)
     except Exception as exc:
         log.error("Pipeline failed (%s). Inspect credentials and configuration privately.", type(exc).__name__)
         raise SystemExit(1) from None

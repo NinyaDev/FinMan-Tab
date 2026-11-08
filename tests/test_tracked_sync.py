@@ -234,11 +234,15 @@ class PipelineRecoveryTests(unittest.TestCase):
             }.items():
                 stack.enter_context(patch.object(pipeline, name, value))
             pipeline.main()
-        legacy.assert_called_once_with(None, 'legacy', 'legacy-before')
-        tracked.assert_called_once_with(None, 'amex', 'amex-before')
+            self.assertEqual(saved[-1]['existing']['cursor'], 'legacy-next')
+            legacy.reset_mock()
+            tracked.reset_mock()
+            pipeline.main(only_banks=['amex'], send_summary=False)
+            legacy.assert_not_called()
+            tracked.assert_called_once_with(None, 'amex', 'amex-before')
+            self.assertEqual(saved[-1]['existing']['cursor'], 'legacy-before')
         writer.upsert.assert_not_called()
         writer.lookup.assert_not_called()
-        self.assertEqual(saved[-1]['existing']['cursor'], 'legacy-next')
         self.assertEqual(saved[-1]['amex']['cursor'], 'amex-next')
 
     def test_partial_success_keeps_cursor_and_retry_does_not_duplicate(self):
