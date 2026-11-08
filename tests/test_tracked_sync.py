@@ -74,8 +74,9 @@ class FakeSheet:
 class TrackedTests(unittest.TestCase):
     def test_full_table_stops_without_moving_or_overwriting_footer(self):
         with patch('clients.tracked_writer.sheets._find_empty_data_row', return_value=None):
-            with self.assertRaises(ReconciliationRequired):
-                self.writer.upsert(self.tx, self.table, 'Coffee', 12.5, 'Card_')
+            with patch('clients.table_capacity.expand', side_effect=ValueError('Occupied space')):
+                with self.assertRaises(ValueError):
+                    self.writer.upsert(self.tx, self.table, 'Coffee', 12.5, 'Card_')
         self.assertEqual(self.sheet.writes, 0)
 
     def setUp(self):

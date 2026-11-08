@@ -50,9 +50,10 @@ and later modifications to transactions outside that import window.
   untouched; they still need manual reconciliation.
 - Negative rewards/refunds are preserved if supplied by Plaid. This does not
   establish whether OnePay supplies any particular reward transaction.
-- A full tracked table stops safely instead of using the legacy extender,
-  which does not move the total row. Expand the table with its total preserved
-  before resuming; the failed run leaves that bank's cursor unchanged.
+- Full tracked tables grow by ten rows into empty space, moving the SUM total
+  and its dedicated footer-color rule atomically. Occupied cells, overlapping
+  tables/merges, custom totals, or insufficient worksheet rows stop the sync
+  for review without advancing its cursor.
 
 Constraints: serialize runners, as the private workflow already does. Do not
 sort/edit tables during sync. Metadata is attached to whole rows plus a stored

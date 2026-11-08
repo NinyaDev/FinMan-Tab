@@ -105,10 +105,11 @@ class TrackedWriter:
 
         row = sheets._find_empty_data_row(self.service, self.spreadsheet_id, table)
         if row is None:
-            # The legacy extender enlarges the range without moving the total
-            # row. Refuse rather than turn a footer into a transaction or let
-            # the viewer count it. Table expansion must preserve the footer.
-            raise ReconciliationRequired("Table is full; expand it while preserving its total row")
+            from clients.table_capacity import expand
+            table = expand(self.service, self.spreadsheet_id, table, sheets._execute_with_backoff)
+            row = sheets._find_empty_data_row(self.service, self.spreadsheet_id, table)
+        if row is None:
+            raise ReconciliationRequired("No empty transaction row after expansion")
         col = table["range"]["startColumnIndex"]
         location = {"dimensionRange": {
             "sheetId": table["range"]["sheetId"], "dimension": "ROWS",
