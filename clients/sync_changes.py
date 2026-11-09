@@ -28,7 +28,8 @@ def apply_changes(added, modified, removed, upsert, remove):
     """
     latest = {t.transaction_id: t for t in [*added, *modified]}
     removed_ids = {t.transaction_id for t in removed}
-    for tx in latest.values():
+    # Plaid may return newest first; match the Sheet's oldest-first layout.
+    for tx in sorted(latest.values(), key=lambda t: str(getattr(t, 'date', ''))):
         if tx.transaction_id in removed_ids:
             continue
         pending_id = getattr(tx, "pending_transaction_id", None)

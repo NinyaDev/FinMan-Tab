@@ -180,6 +180,13 @@ class TrackedTests(unittest.TestCase):
 
 
 class ChangeTests(unittest.TestCase):
+    def test_posted_transactions_are_written_oldest_first(self):
+        txs = [Tx(transaction_id=str(i), date=day, pending=False) for i, day in
+               enumerate(['2026-11-07','2026-11-01','2026-11-04'])]
+        writes = []
+        apply_changes(txs, [], [], writes.append, lambda _: None)
+        self.assertEqual([t.date for t in writes], ['2026-11-01','2026-11-04','2026-11-07'])
+
     def test_pending_replaced_by_posted_and_removed_wins(self):
         pending = Tx(transaction_id='pending', pending=True)
         posted = Tx(transaction_id='posted', pending=False, pending_transaction_id='pending')
