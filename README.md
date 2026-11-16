@@ -52,14 +52,14 @@ Built around an existing personal-finance spreadsheet rather than replacing it: 
 
 ## Features
 
-- **Bank ingest via Plaid `/transactions/sync`:** incremental, cursor-based fetch - each run only sees transactions that posted since the previous run. Completed bank syncs advance their cursor; partial failures require reconciliation before replay.
+- **Bank ingest via Plaid `/transactions/sync`:** cursor-based incremental updates. The opt-in tracked path handles added, modified, and removed transactions and imports posted entries only. The legacy path handles additions.
 - **Spanglish description cleaning via Gemini 3.1 Flash Lite:** few-shot prompted with ~20 of your own real descriptions, so output stays in your voice (`"Walmart - Groceries"`, `"Gas en Chevron"`, `"Paycheck from Student Job"`). Fail-soft - if Gemini is overloaded for a transaction, the raw merchant string lands in the sheet so nothing is ever lost.
 - **Date-driven tab routing:** uses `tx.date` (not `today`) so a cron at 12:01 AM on June 1 still files May 30 transactions into Mayo, not Junio.
 - **Auto-creates new month tabs from a hidden Template:** duplicates the Template, makes the new tab visible, renames every table inside it to `<prefix><MonthName>` for cleanliness.
 - **Configurable balance carryover:** writes a starting-balance row at the top of each new month tab - pulled either from a specific cell in the prior tab (e.g. running balance) or the prior month's table footer (e.g. credit-card total).
 - **Monthly summary email:** on the first run of each new month, Gemini analyzes the prior month's transactions and produces a structured summary (net, top merchants, spend-by-category, observations, commentary). An HTML email with an embedded pie chart (via QuickChart.io) lands in your inbox. State persists across runs so each month is summarized exactly once, with prior-month context fed into Gemini for trend comparisons.
-- **Idempotent and crash-safe:** Plaid cursors persist per-bank to `access_tokens.json` only after the bank's transaction loop fully succeeds, so a mid-run failure retains the previous cursor. Rows written before that failure may be replayed; reconcile partial writes before retrying. The summary state file works the same way - only marks a month as summarized after the email send succeeds.
-- **Rate-limit resilient Sheets writes:** each transaction reuses one spreadsheet metadata fetch instead of re-reading it 3+ times (~5 reads down to ~2), and every Sheets call retries with exponential backoff on a transient 429/5xx, so a quota burst during month-tab creation waits out the window instead of crashing the run.
+- **Opt-in duplicate protection:** tracked writes commit description, amount, and hidden identity atomically. Retries look up that identity before inserting. Cursors advance after successful bank processing; legacy banks still need reconciliation after partial writes. Manual amount conflicts stop tracked updates for review.
+- **Rate-limit handling:** supported Sheets reads and legacy operations use exponential backoff. Tracked mutations deliberately avoid automatic retries after an ambiguous response; the next run checks row identity first.
 - **Optional first-sync date filter:** ignore historical transactions on the very first run via `pipeline.start_date` in `config.yaml`. Doesn't affect any future run.
 - **Single-process, no database, no server:** state lives in JSON / YAML files; runs as a single Python script on a free-tier GitHub Actions cron every 3 days at 3 AM Mountain Time.
 
@@ -157,21 +157,34 @@ Edit `config.yaml`:
 
 `config.yaml` is **gitignored**, so your spreadsheet ID and routing stay private.
 
-### 5. Link your banks
+### 5. Connect a new card without resetting existing accounts
 
-Run the one-time Plaid Link UI and follow each bank's OAuth flow:
+Use the isolated helpers in [`onboarding/`](onboarding/) and the
+[rollout guide](docs/safe-rollout.md). The older `setup/link_banks.py` writes the
+root token file and is not the coordinated onboarding path for an existing
+private deployment.
 
-```bash
-python setup/link_banks.py
-```
+The connection and first import are separate steps:
 
-This opens a local web page that lets you authenticate one institution at a time. Tokens get appended to `access_tokens.json` (gitignored). Then dump the resulting account IDs:
+1. Start Plaid Link (or a Plaid Hosted Link session) with the Transactions product.
+   Sign into the bank directly in that flow and select the card.
+2. Retrieve the temporary public token after consent, then exchange it on the
+   backend for an access token and Item ID. Bank passwords are not stored in Git.
+3. Read `/accounts/get` and map the chosen account ID to a unique table prefix,
+   such as `Amex_`, for both positive charges and negative credits.
+4. Add the two-column table to the hidden Template **and** each existing month
+   needed for the first import. Updating Template alone does not alter existing tabs.
+5. Preview the import window. Fetch the initial sync pages and import eligible
+   posted transactions with hidden row identity; pending entries wait until posted.
+6. Save the new cursor only after those writes succeed. Briefly pause the runner
+   while merging the new connection, routing, and cursor with its latest private
+   state. Preserve all existing banks and summary history.
+7. Run read-only validation, then a targeted bank sync with summaries disabled.
+   Verify the Sheet and state persistence before relying on scheduled execution.
 
-```bash
-python setup/inspect_accounts.py
-```
-
-Copy each `account_id` you want to track into `account_routing` in `config.yaml`, mapping it to your bank nickname plus the table prefixes for income / outflow tables in your sheet.
+The isolated helper defaults to Sandbox and writes a separate connection file.
+Production consent, table setup, first import, and coordinated runner activation
+are explicit steps; linking by itself does not activate scheduled imports.
 
 ### 6. Run
 
@@ -222,11 +235,18 @@ balance_carryover:
 
 ### `pipeline`
 
+Bank nicknames must match the keys in the private token configuration.
+`track_transaction_ids: true` enables tracking for every bank; migrate existing
+rows deliberately before using that broader switch.
+
 ```yaml
 pipeline:
   start_date: "2026-05-01"   # one-time first-sync filter; ignored after cursor is set
   pacing_second: 0.5          # delay between Gemini calls
-  max_tx_per_bank: null       # null = no cap; integer caps per run for dev
+  max_tx_per_bank: null       # reserved setting; currently not enforced
+  tracked_banks: [amex]       # opt in only the new bank; existing banks keep their path
+  bank_start_dates:
+    amex: "2026-11-01"        # excludes older entries and later historical updates
 ```
 
 ---
