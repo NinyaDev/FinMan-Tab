@@ -326,13 +326,19 @@ Private remote access and automatic startup require separate deployment work.
 
 ## Running tests
 
+The Gemini SDK is pinned to `2.34.0`, and the shared cleaner/summary client
+explicitly selects `v1beta`. Keep both choices deliberate: the runner previously
+installed SDK 3.0.0 automatically, switched to `v1`, and received 404s for the
+configured preview model. A synthetic live cleaner check with the pinned SDK
+returned a generated description without calling Sheets, Plaid, or email.
+
 ```bash
 python scripts/test_offline.py
 ```
 
 The runner uses a disposable copy with synthetic configuration, a dummy Gemini
 key, and blocked network connections. It avoids replacing your root config or
-advancing production cursors. The current suite has **84 tests**, covering routing,
+advancing production cursors. The current suite has **86 tests**, covering routing,
 summary behavior, tracked retry recovery, conflicts, ordering, table growth,
 classification, onboarding isolation, and viewer rendering/data reads.
 
@@ -353,7 +359,7 @@ prove real transaction processing.
 - Private GitHub Actions scheduling; the workflow cron is authoritative and uses UTC
 - Private deployment preserves cursors and summary history in encrypted storage; credentials are never cached
 - Opt-in tracked writes preserve identity and manual description edits, handle bank changes, and grow standard SUM-total tables into empty space
-- Read-only Sheets viewer, isolated onboarding helpers, and 84 offline tests
+- Read-only Sheets viewer, isolated onboarding helpers, and 86 offline tests
 
 **Potential future work:**
 - Historical reconciliation and broader tracking migration for existing bank rows

@@ -27,7 +27,10 @@ if not GEMINI_API_KEY:
     raise SystemExit(1)
 
 # Gemini Flash is the right balance of speed + cost. Use 2.5 if available.
-_client = genai.Client(api_key=GEMINI_API_KEY)
+# Preview model access requires v1beta. Do not rely on SDK version defaults.
+# The monthly-summary module shares this client.
+_client = genai.Client(api_key=GEMINI_API_KEY,
+                       http_options=types.HttpOptions(api_version="v1beta"))
 
 # This points to the file where we will add the personal examples.
 PROMPTS_FILE = Path("prompts.yaml")
