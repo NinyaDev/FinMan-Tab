@@ -237,7 +237,11 @@ balance_carryover:
 
 Bank nicknames must match the keys in the private token configuration.
 `track_transaction_ids: true` enables tracking for every bank; migrate existing
-rows deliberately before using that broader switch.
+rows deliberately before using that broader switch. The read-only matcher in
+`onboarding/reconcile.py` separates exact matches from edited or ambiguous rows.
+Migrated rows can lock their existing descriptions so later bank updates preserve
+your wording. Tracking start dates define the historical window being migrated;
+older rows are not silently matched or rewritten.
 
 ```yaml
 pipeline:
@@ -339,7 +343,7 @@ python scripts/test_offline.py
 
 The runner uses a disposable copy with synthetic configuration, a dummy Gemini
 key, and blocked network connections. It avoids replacing your root config or
-advancing production cursors. The current suite has **91 tests**, covering routing,
+advancing production cursors. The current suite has **97 tests**, covering routing,
 summary behavior, tracked retry recovery, conflicts, ordering, table growth,
 classification, onboarding isolation, and viewer rendering/data reads.
 
@@ -360,7 +364,7 @@ prove real transaction processing.
 - Private GitHub Actions scheduling; the workflow cron is authoritative and uses UTC
 - Private deployment preserves cursors and summary history in encrypted storage; credentials are never cached
 - Opt-in tracked writes preserve identity and manual description edits, handle bank changes, and grow standard SUM-total tables into empty space
-- Read-only Sheets viewer, isolated onboarding helpers, and 91 offline tests
+- Read-only Sheets viewer, isolated onboarding helpers, and 97 offline tests
 
 **Potential future work:**
 - Historical reconciliation and broader tracking migration for existing bank rows

@@ -72,6 +72,17 @@ class FakeSheet:
 
 
 class TrackedTests(unittest.TestCase):
+    def test_migrated_description_survives_bank_updates(self):
+        self.write()
+        record = self.sheet.records[0]
+        state = json.loads(record['metadataValue'])
+        state['description_locked'] = True
+        record['metadataValue'] = json.dumps(state)
+        previous = self.sheet.cells[(7, 2, 2)][0]
+        self.tx.amount = 20
+        self.writer.upsert(self.tx, self.table, 'New bank wording', 20, 'Card_')
+        self.assertEqual(self.sheet.cells[(7, 2, 2)], [previous, 20])
+
     def test_full_table_stops_without_moving_or_overwriting_footer(self):
         with patch('clients.tracked_writer.sheets._find_empty_data_row', return_value=None):
             with patch('clients.table_capacity.expand', side_effect=ValueError('Occupied space')):
