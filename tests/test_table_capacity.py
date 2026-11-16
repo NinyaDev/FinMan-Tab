@@ -17,5 +17,12 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual(requests[3]['updateConditionalFormatRule']['rule']['ranges'][0]['startRowIndex'],52)
 
     def test_occupied_space_or_custom_formula_is_not_overwritten(self):
-        for rows in ([['Total','=SUM(J27:J42)'],['Personal note']], [['Total','=AVERAGE(J27:J42)']]):
+        for rows in ([['Total','=SUM(J27:J42)'],['Personal note']], [['Total','=AVERAGE(J27:J42)']],
+                     [['Total','=SUM(A1:A5)']], [['Total','=SUM(J:J)']],
+                     [['Total','=SUM(J27:J42,100)']], [['Total','=SUM(Other!J27:J42)']]):
             with self.assertRaises(ValueError): expansion_requests(self.table,rows,[])
+
+    def test_current_table_structured_total_is_supported(self):
+        table={**self.table,'name':'Card_Noviembre',
+               'columnProperties':[{'columnIndex':1,'columnName':'Amount'}]}
+        self.assertTrue(expansion_requests(table,[['Total','=SUM(Card_Noviembre[Amount])']],[]))

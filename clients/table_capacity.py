@@ -10,9 +10,6 @@ def expansion_requests(table, rows, conditional_formats, extra=10):
     if grid['endColumnIndex'] != col + 2 or not rows or len(rows[0]) != 2:
         raise ValueError('Expected a two-column table with a total row')
     label, formula = rows[0]
-    if not isinstance(label, str) or not isinstance(formula, str) or not re.fullmatch(
-            r'=SUM\([^()]+\)', formula, re.IGNORECASE):
-        raise ValueError('Custom total requires manual table expansion')
     if any(any(value not in ('', None) for value in row) for row in rows[1:]):
         raise ValueError('Table expansion would overwrite existing cells')
     def letter(index):
@@ -22,6 +19,16 @@ def expansion_requests(table, rows, conditional_formats, extra=10):
             result = chr(65 + remainder) + result
         return result
     amount_col = letter(col + 2)
+    # Only move a total of this table's data. SUM(A1:A5), SUM(J:J), or a
+    # cross-sheet total is a custom formula, not an interchangeable footer.
+    compact = re.sub(r'\s+', '', formula).replace('$', '') if isinstance(formula, str) else ''
+    expected = f'=SUM({amount_col}{start+2}:{amount_col}{end-1})'
+    column_name = next((c.get('columnName') for c in table.get('columnProperties', [])
+                        if c.get('columnIndex', 0) == 1), None)
+    structured = (f"=SUM({table['name']}[{column_name}])"
+                  if table.get('name') and column_name else '')
+    if not isinstance(label, str) or compact.upper() not in {expected.upper(), structured.upper()} or not compact:
+        raise ValueError('Custom total requires manual table expansion')
     last = end + extra
     footer = dict(sheetId=sid, startRowIndex=last-1, endRowIndex=last,
                   startColumnIndex=col, endColumnIndex=col+2)
