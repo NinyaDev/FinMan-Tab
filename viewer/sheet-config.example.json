@@ -1,0 +1,26 @@
+{
+  "spreadsheet_id": "DISPOSABLE_SHEET_ID",
+  "months": {
+    "Octubre": "2026-10",
+    "Noviembre": "2026-11"
+  },
+  "accounts": [
+    {
+      "name": "Amex",
+      "prefix": "Amex_"
+    },
+    {
+      "name": "OnePay",
+      "prefix": "OnePay_APR"
+    },
+    {
+      "name": "SoFi",
+      "prefix": "Sofi_Checkings_Income"
+    },
+    {
+      "name": "SoFi",
+      "prefix": "Gastos_Checkings_Spend"
+    }
+  ],
+  "classifications_range": null
+}

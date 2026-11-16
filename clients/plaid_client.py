@@ -57,8 +57,18 @@ def load_tokens() -> dict:
     return json.loads(TOKENS_FILE.read_text())
 
 def save_tokens(tokens: dict) -> None:
-    # Persist tokens dict (overwrite file)
-    TOKENS_FILE.write_text(json.dumps(tokens, indent=2))
+    # Replace atomically so interruption cannot truncate the cursor file.
+    import tempfile
+    fd, temporary = tempfile.mkstemp(prefix=".tokens-", dir=TOKENS_FILE.parent)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(tokens, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, TOKENS_FILE)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     
 
 def load_accounts() -> dict:

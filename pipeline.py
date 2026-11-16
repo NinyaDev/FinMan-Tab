@@ -15,6 +15,8 @@ from clients.plaid_client import get_client, load_tokens, save_tokens
 from clients.gemini_client import clean_description
 from clients.google_auth import get_credentials
 from clients.insights import maybe_send_monthly_summary
+from clients.sync_changes import fetch_changes, apply_changes
+from clients.tracked_writer import TrackedWriter, ReconciliationRequired
 from clients.sheets_writer import (
     get_or_create_month_tab,
     find_table_in_tab,
@@ -82,7 +84,7 @@ def route_transaction(tx, account_routing):
     
     return routing["bank"], table_prefix, direction, amount
 
-def main():
+def main(only_banks=None, send_summary=True):
     plaid_client = get_client(env="production")
     creds = get_credentials()
     sheets_service = build("sheets", "v4", credentials=creds)
@@ -90,6 +92,8 @@ def main():
     spreadsheet_id = CONFIG["sheet"]["spreadsheet_id"]
     account_routing = CONFIG["account_routing"]
     tokens = load_tokens()
+    if only_banks and not set(only_banks).issubset(tokens):
+        raise ValueError("Requested bank is not configured")
     
     if not tokens:
         log.error("No access tokens found. Please run setup/link_banks.py first.")
@@ -106,11 +110,47 @@ def main():
     bank_errors = []
 
     for nickname, token_data in tokens.items():
+        if only_banks and nickname not in only_banks:
+            continue
         access_token = token_data["access_token"]
         prior_cursor = token_data.get("cursor", "")
         log.info(f"Syncing {nickname} (cursor={'<empty, first run>' if not prior_cursor else 'set'})...")
         
         try:
+            tracked = (CONFIG["pipeline"].get("track_transaction_ids", False)
+                       or nickname in CONFIG["pipeline"].get("tracked_banks", []))
+            bank_start = CONFIG["pipeline"].get("bank_start_dates", {}).get(nickname)
+            if tracked:
+                if not token_data.get("item_id"):
+                    raise ValueError("Tracked sync requires the stable Plaid Item ID")
+                writer = TrackedWriter(sheets_service, spreadsheet_id, token_data["item_id"])
+                added, modified, removed, new_cursor = fetch_changes(plaid_client, access_token, prior_cursor)
+                modified_only = {tx.transaction_id for tx in modified} - {tx.transaction_id for tx in added}
+
+                def write_tracked(tx):
+                    nonlocal total_processed, total_skipped
+                    cutoff = bank_start or (START_DATE if not prior_cursor else None)
+                    if cutoff and str(tx.date) < str(cutoff):
+                        total_skipped += 1
+                        return
+                    route = route_transaction(tx, account_routing)
+                    if route is None:
+                        total_skipped += 1
+                        return
+                    if tx.transaction_id in modified_only and not writer.lookup(tx.transaction_id):
+                        raise ReconciliationRequired("Modified transaction predates row tracking")
+                    bank, prefix, direction, amount = route
+                    description = clean_description(tx.name, tx.amount, nickname, str(tx.date))
+                    time.sleep(GEMINI_PACING)
+                    tab, metadata = get_or_create_month_tab(sheets_service, spreadsheet_id, str(tx.date))
+                    table = find_table_in_tab(sheets_service, spreadsheet_id, tab["sheetId"], prefix, metadata)
+                    total_processed += int(writer.upsert(tx, table, description, amount, prefix))
+
+                apply_changes(added, modified, removed, write_tracked, writer.remove)
+                tokens[nickname]["cursor"] = new_cursor
+                save_tokens(tokens)
+                continue
+
             transactions, new_cursor = fetch_recent_transactions(plaid_client, access_token, prior_cursor)
             # Checking if there's no cursor and there is a START DATE (ONETIME)
             if not prior_cursor and START_DATE:
@@ -186,7 +226,8 @@ def main():
     # Monthly summary attempt - non-critical; failures must not crash the pipeline.
     # The orchestrator self-recovers by retrying on the next daily run.
     try:
-        maybe_send_monthly_summary(creds)
+        if send_summary:
+            maybe_send_monthly_summary(creds)
     except Exception as e:
         log.error("Monthly summary failed (%s); will retry next run", type(e).__name__)
 
@@ -204,8 +245,13 @@ def main():
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--bank', action='append', help='Sync only this bank; preserve all other cursors')
+    parser.add_argument('--skip-summary', action='store_true', help='Do not send a monthly summary')
+    args = parser.parse_args()
     try:
-        main()
+        main(only_banks=args.bank, send_summary=not args.skip_summary)
     except Exception as exc:
         log.error("Pipeline failed (%s). Inspect credentials and configuration privately.", type(exc).__name__)
         raise SystemExit(1) from None

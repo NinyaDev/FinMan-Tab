@@ -1,0 +1,38 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect a card — Finance Manager</title></head><body>
+<main><h1>Connect your new card</h1><p>Environment: <strong>{{ environment }}</strong>. This saves a separate connection file. It does not change your existing banks, cursors, or spreadsheet.</p><p>Choose American Express in Link and authorize the account yourself.</p><button id="connect">Connect with Plaid</button><p id="status" role="status"></p><pre id="accounts"></pre></main>
+<script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+<script>
+const status = document.querySelector('#status');
+const button = document.querySelector('#connect');
+const csrf = {{ csrf | tojson }};
+async function post(path, body) {
+  const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify(body)});
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Connection request failed');
+  return data;
+}
+async function connect(resume = false) {
+  button.disabled = true;
+  try {
+    let token = sessionStorage.getItem('finance_link_token');
+    if (!resume) {
+      token = (await post('/link-token', {})).link_token;
+      sessionStorage.setItem('finance_link_token', token);
+    }
+    if (!token) throw new Error('OAuth session expired. Start a new connection.');
+    const options = {token, onSuccess: async public_token => {
+      try {
+        const result = await post('/exchange', {public_token});
+        sessionStorage.removeItem('finance_link_token');
+        history.replaceState({}, '', '/');
+        status.textContent = 'Connection saved separately. Choose the account ID below for routing; production is unchanged.';
+        document.querySelector('#accounts').textContent = JSON.stringify(result.accounts, null, 2);
+      } catch(error) { status.textContent = error.message; }
+    }, onExit: () => { button.disabled = false; }};
+    if (resume) options.receivedRedirectUri = window.location.href;
+    Plaid.create(options).open();
+  } catch(error) { status.textContent = error.message; button.disabled = false; }
+}
+button.addEventListener('click', () => connect());
+if (new URLSearchParams(location.search).has('oauth_state_id')) connect(true);
+</script></body></html>

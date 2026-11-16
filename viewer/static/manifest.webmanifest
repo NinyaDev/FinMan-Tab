@@ -1,0 +1,6 @@
+{
+  "id": "/", "name": "Margin — spending journal", "short_name": "Margin",
+  "start_url": "/", "scope": "/", "display": "standalone",
+  "background_color": "#f3f0e7", "theme_color": "#315b46",
+  "icons": [{"src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]
+}

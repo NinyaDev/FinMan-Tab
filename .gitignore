@@ -11,3 +11,11 @@ __pycache__/
 *.pyc
 .DS_Store
 config.yaml
+
+# Local private deployment and migration backup
+migration-private/
+
+# Isolated bank connections and viewer credentials
+connection-*.json
+viewer/*.local.json
+viewer/readonly-credentials.json
