@@ -22,7 +22,7 @@ a separate copy of the application with personal changes mixed into its code.
 Pushing public code does not deploy it automatically: the runner's source `ref`
 must change. The Sheet feeds the viewer; editing the viewer never changes Plaid.
 
-A Python pipeline that pulls bank transactions through **Plaid**, cleans the merchant descriptions through **Google Gemini Flash** (in your own voice via few-shot prompting), and writes them into the right table of the right tab in **your own Google Sheet**. At the start of every month it sends you an HTML email summary of the prior month with an LLM-generated commentary and a category breakdown pie chart. Runs unattended on a free-tier GitHub Actions cron.
+A Python pipeline that pulls bank transactions through **Plaid**, cleans the merchant descriptions through **Google Gemini Flash** (in your own voice via few-shot prompting), and writes them into the right table of the right tab in **your own Google Sheet**. At the start of every month it sends you an HTML email summary of the prior month with an LLM-generated commentary and a category breakdown pie chart. Runs unattended through the private runner’s GitHub Actions schedule.
 
 Built around an existing personal-finance spreadsheet rather than replacing it: month tabs, structured tables, running balances, and TOTAL formulas all keep working. The pipeline is config-driven and fork-friendly - your account IDs, your tab names, and your prompt examples live in a few YAML files, not in the code.
 
@@ -57,11 +57,11 @@ Built around an existing personal-finance spreadsheet rather than replacing it: 
 - **Date-driven tab routing:** uses `tx.date` (not `today`) so a cron at 12:01 AM on June 1 still files May 30 transactions into Mayo, not Junio.
 - **Auto-creates new month tabs from a hidden Template:** duplicates the Template, makes the new tab visible, renames every table inside it to `<prefix><MonthName>` for cleanliness.
 - **Configurable balance carryover:** writes a starting-balance row at the top of each new month tab - pulled either from a specific cell in the prior tab (e.g. running balance) or the prior month's table footer (e.g. credit-card total).
-- **Monthly summary email:** on the first run of each new month, Gemini analyzes the prior month's transactions and produces a structured summary (net, top merchants, spend-by-category, observations, commentary). An HTML email with an embedded pie chart (via QuickChart.io) lands in your inbox. State persists across runs so each month is summarized exactly once, with prior-month context fed into Gemini for trend comparisons.
+- **Monthly summary email:** on the first run of each new month, Gemini analyzes the prior month's transactions and produces a structured summary (net, top merchants, spend-by-category, observations, commentary). An HTML email with an embedded pie chart (via QuickChart.io) lands in your inbox. State persists across runs to avoid repeating completed monthly summaries, with prior-month context fed into Gemini for trend comparisons.
 - **Opt-in duplicate protection:** tracked writes commit description, amount, and hidden identity atomically. Retries look up that identity before inserting. Cursors advance after successful bank processing; legacy banks still need reconciliation after partial writes. Manual amount conflicts stop tracked updates for review.
 - **Rate-limit handling:** supported Sheets reads and legacy operations use exponential backoff. Tracked mutations deliberately avoid automatic retries after an ambiguous response; the next run checks row identity first.
 - **Optional first-sync date filter:** ignore historical transactions on the very first run via `pipeline.start_date` in `config.yaml`. Doesn't affect any future run.
-- **Single-process, no database, no server:** state lives in JSON / YAML files; runs as a single Python script on a free-tier GitHub Actions cron every 3 days at 3 AM Mountain Time.
+- **No database required:** the sync runs as a Python script. The private runner encrypts its persisted cursors and summary history; the optional viewer runs a separate local web server.
 
 ---
 
@@ -72,8 +72,8 @@ Built around an existing personal-finance spreadsheet rather than replacing it: 
 - **LLM:** Google Gemini 3.1 Flash Lite Preview via `google-genai` SDK (free tier, `thinking_budget=0` for speed)
 - **Spreadsheet:** Google Sheets API v4 via `google-api-python-client` - uses the structured **Tables** feature so column layouts and TOTAL formulas survive duplication
 - **Auth:** Google OAuth user-flow with combined Gmail + Sheets scopes (`google-auth-oauthlib`)
-- **Bank linking UI:** one-time Flask page at `setup/link_banks.py` to run Plaid Link
-- **Scheduler:** GitHub Actions cron (free for public repos)
+- **Bank linking:** isolated Flask helpers in `onboarding/`; production can also use Plaid Hosted Link with a separate backend exchange
+- **Scheduler:** GitHub Actions in the private runner; schedule and usage depend on that deployment
 
 ---
 
@@ -108,7 +108,7 @@ Per transaction the orchestrator runs: **fetch → route by `account_id` → cle
 ### 1. Prerequisites
 
 - Python 3.10+
-- A [Plaid Developer account](https://dashboard.plaid.com/signup) (free Trial tier - 3 banks)
+- A [Plaid Developer account](https://dashboard.plaid.com/signup) with the required environment and Transactions access
 - A [Google Cloud project](https://console.cloud.google.com/) with the **Sheets API** enabled
 - A [Gemini API key](https://aistudio.google.com/app/apikey) (free tier)
 - An existing Google Sheet you'd like to write into, with at least one tab named `Template` containing the structured Tables you want populated
@@ -261,8 +261,17 @@ pipeline:
 │   ├── plaid_client.py     # Plaid SDK + token / cursor I/O
 │   ├── gemini_client.py    # Gemini wrapper with retries + fail-soft
 │   ├── sheets_writer.py    # Tab creation, table rename, carryover, writes
+│   ├── sync_changes.py     # Complete change batches; posted-only, oldest-first writes
+│   ├── tracked_writer.py   # Atomic row values and hidden transaction identity
+│   ├── table_capacity.py   # Grow tables into empty space; preserve totals
+│   ├── transaction_kind.py # Conservative bank-data classification
 │   ├── google_auth.py      # Shared OAuth helper (Gmail + Sheets scopes)
 │   └── insights.py         # Monthly summary: gather, Gemini, chart URL, email
+├── onboarding/            # Isolated Link flow and offline routing plan
+├── viewer/                # Read-only Flask viewer; synthetic data by default
+├── scripts/
+│   ├── test_offline.py     # Disposable test copy with network disabled
+│   └── sheets_acceptance_probe.py # Synthetic live-validation transport harness
 ├── setup/
 │   ├── link_banks.py       # One-time Flask page for Plaid Link
 │   ├── inspect_accounts.py # Dumps account IDs per linked bank
@@ -286,13 +295,51 @@ pipeline:
 
 ---
 
+## Sheets viewer
+
+Preview the viewer without credentials or real transactions:
+
+```bash
+python -m viewer.app
+```
+
+Open `http://127.0.0.1:8765`. Demo data is labeled as a sample. The viewer provides
+month/account filters, search, and transaction lists; editing remains in Sheets.
+
+For live mode, copy `viewer/sheet-config.example.json` to a private local config,
+set your spreadsheet ID, explicit tab-to-year/month mapping, and table prefixes.
+Share the workbook with a service account as **Viewer**, then run:
+
+```bash
+python -m viewer.app --sheet-config viewer/sheet.local.json \
+  --readonly-credentials viewer/readonly-credentials.json
+```
+
+The live adapter reads descriptions and amounts from Sheets and dates/types from
+hidden row metadata. Payments and transfers are excluded from classified spending.
+Unknown rows remain visible for review; totals are partial until those rows are
+classified. Historical bank rows are not silently guessed or deduplicated.
+
+The server binds to localhost. A home-screen manifest is included, but it does
+not provide phone connectivity, secure hosting, or a native widget by itself.
+Private remote access and automatic startup require separate deployment work.
+
 ## Running tests
 
 ```bash
-python -m unittest discover tests
+python scripts/test_offline.py
 ```
 
-39 tests covering routing, sheets helpers, insights (state file round-trip, classification, chart URL, email body composition), and Sheets rate-limit handling (read-quota A/B + backoff retry against a fake service). Tests use stdlib `unittest` only - no extra dependency.
+The runner uses a disposable copy with synthetic configuration, a dummy Gemini
+key, and blocked network connections. It avoids replacing your root config or
+advancing production cursors. The current suite has **84 tests**, covering routing,
+summary behavior, tracked retry recovery, conflicts, ordering, table growth,
+classification, onboarding isolation, and viewer rendering/data reads.
+
+Live write acceptance checks belong in a separate synthetic workbook. See
+[validation evidence](docs/live-sheet-validation.md) for what those checks prove
+and what remains outside their scope. A successful access check alone does not
+prove real transaction processing.
 
 ---
 
@@ -303,13 +350,14 @@ python -m unittest discover tests
 - Cursor-based incremental sync after successful bank processing
 - Month-tab auto-creation with table rename + balance carryover
 - Monthly summary email with category breakdown pie chart, structured Gemini output, and trend comparisons against prior-month history
-- GitHub Actions cron deployment - runs every 3 days at 3 AM Mountain Time, fully unattended
+- Private GitHub Actions scheduling; the workflow cron is authoritative and uses UTC
 - Private deployment preserves cursors and summary history in encrypted storage; credentials are never cached
-- Sheets writes reuse one metadata fetch per transaction (~2 reads each) and retry with backoff on transient 429/5xx
-- 39 passing unit tests
+- Opt-in tracked writes preserve identity and manual description edits, handle bank changes, and grow standard SUM-total tables into empty space
+- Read-only Sheets viewer, isolated onboarding helpers, and 84 offline tests
 
 **Potential future work:**
-- Per-transaction category labeling in the sheet itself (not just in the monthly summary)
+- Historical reconciliation and broader tracking migration for existing bank rows
+- Secure phone access and persistent viewer hosting
 - Batch all of a run's writes into a single Sheets call to cut the write count further
 - Cross-year carryover automation
 
@@ -318,7 +366,10 @@ python -m unittest discover tests
 - The Sheets API has a 60-requests-per-minute-per-user quota. The pipeline keeps reads to ~2 per transaction and retries with backoff on a 429, which comfortably covers personal volumes (<100 tx/day); a very large backfill in one run would still benefit from batching the writes.
 - The first call to Plaid `/transactions/sync` for a brand-new Item sometimes returns `added=[]` while Plaid does its background pull. Re-run after a minute and it catches up.
 - Cross-year carryover (Diciembre 2026 → Enero 2027) requires manually filling the January carryover row by hand the first time, since each year's transactions live in a separate spreadsheet.
-- GitHub Actions scheduled runs can drift by up to ~30 minutes during peak load (GitHub's own caveat). Not a problem for daily personal use.
+- Scheduled imports are not instant updates. Posting delays and runner timing affect when a transaction reaches the Sheet.
+- Oldest-first applies within each fetched batch. Late historical arrivals do not trigger a global re-sort of existing rows.
+- Tracked metadata is row-attached with a stored column offset. Sorting just one card’s cells or moving tables can separate values from identity; coordinated moves must include metadata.
+- Table growth stops for occupied adjacent cells, overlapping tables/merges, custom total formulas, or insufficient worksheet rows. It does not overwrite those contents.
 
 ---
 
