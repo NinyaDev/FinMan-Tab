@@ -1,11 +1,26 @@
 # Finance Manager
 
-Local development now includes opt-in transaction identity tracking, isolated bank
-onboarding, and a read-only Sheets viewer. See [safe rollout and offline tests](docs/safe-rollout.md).
-Preview the synthetic viewer with `.venv/bin/python -m viewer.app`; production
-configuration and the private runner remain unchanged until a reviewed rollout.
+The pipeline keeps Google Sheets as the place to edit your finances. Optional
+transaction identity tracking protects imported rows from duplicate retries, and
+a read-only viewer presents the same Sheet data on a simpler screen.
+See [safe rollout and offline tests](docs/safe-rollout.md).
 
 Personal production runs are hosted in a separate private repository. This public repository runs tests with example configuration only. See [deployment privacy](docs/deployment-privacy.md) before connecting real accounts.
+
+## Public code and private execution
+
+| Repository | Responsibility |
+| --- | --- |
+| Public FinMan-Tab | Python pipeline, bank-linking helpers, viewer, example configuration, and tests |
+| Private runner | Scheduled workflow, exact public source version, encrypted sync state, and deployment instructions |
+| Private Actions Secrets | Plaid credentials, Google authorization, personal routing configuration, and the state encryption key |
+
+The runner checks out the public source at a pinned commit into an ephemeral
+`app/` directory. It restores credentials and cursors, runs the pipeline, persists
+encrypted progress, and removes temporary credential files. It does not maintain
+a separate copy of the application with personal changes mixed into its code.
+Pushing public code does not deploy it automatically: the runner's source `ref`
+must change. The Sheet feeds the viewer; editing the viewer never changes Plaid.
 
 A Python pipeline that pulls bank transactions through **Plaid**, cleans the merchant descriptions through **Google Gemini Flash** (in your own voice via few-shot prompting), and writes them into the right table of the right tab in **your own Google Sheet**. At the start of every month it sends you an HTML email summary of the prior month with an LLM-generated commentary and a category breakdown pie chart. Runs unattended on a free-tier GitHub Actions cron.
 
