@@ -94,7 +94,8 @@ class TrackedWriter:
             if current[1] != state["written_amount"]:
                 raise ReconciliationRequired("Bank update conflicts with edited amount")
             # Description edits survive subsequent bank updates.
-            final_description = description if current[0] == state["written_description"] else current[0]
+            final_description = (description if current[0] == state["written_description"]
+                                 and not state.get("description_locked") else current[0])
             loc = metadata["location"]["dimensionRange"]
             state.update(source_amount=tx.amount, source_name=tx.name,
                          written_amount=amount, written_description=final_description, kind=kind)
