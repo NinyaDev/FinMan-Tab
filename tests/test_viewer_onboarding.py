@@ -12,6 +12,10 @@ from onboarding.plan import make_plan
 
 
 class ViewerTests(unittest.TestCase):
+    def test_untrusted_host_cannot_read_local_viewer(self):
+        response = create_app().test_client().get('/', headers={'Host': 'attacker.example'})
+        self.assertEqual(response.status_code, 400)
+
     def setUp(self):
         self.snapshot = json.loads(DEMO.read_text())
 
@@ -123,6 +127,14 @@ class ViewerTests(unittest.TestCase):
 
 
 class OnboardingTests(unittest.TestCase):
+    def test_untrusted_host_cannot_read_link_session(self):
+        client = link_app(None, '/unused').test_client()
+        self.assertEqual(client.get('/', headers={'Host':'attacker.example'}).status_code, 400)
+
+    def test_production_redirect_host_is_allowed(self):
+        client = link_app(None, '/unused', 'production', 'https://finance.example/').test_client()
+        self.assertEqual(client.get('/', base_url='https://finance.example').status_code, 200)
+
     def test_connection_is_separate_and_private(self):
         with tempfile.TemporaryDirectory() as directory:
             original = Path(directory) / 'access_tokens.json'

@@ -320,7 +320,8 @@ hidden row metadata. Payments and transfers are excluded from classified spendin
 Unknown rows remain visible for review; totals are partial until those rows are
 classified. Historical bank rows are not silently guessed or deduplicated.
 
-The server binds to localhost. A home-screen manifest is included, but it does
+The server binds to localhost and rejects untrusted Host headers. A private
+hosting deployment must deliberately configure its own trusted hostnames. A home-screen manifest is included, but it does
 not provide phone connectivity, secure hosting, or a native widget by itself.
 Private remote access and automatic startup require separate deployment work.
 
@@ -338,7 +339,7 @@ python scripts/test_offline.py
 
 The runner uses a disposable copy with synthetic configuration, a dummy Gemini
 key, and blocked network connections. It avoids replacing your root config or
-advancing production cursors. The current suite has **86 tests**, covering routing,
+advancing production cursors. The current suite has **91 tests**, covering routing,
 summary behavior, tracked retry recovery, conflicts, ordering, table growth,
 classification, onboarding isolation, and viewer rendering/data reads.
 
@@ -359,7 +360,7 @@ prove real transaction processing.
 - Private GitHub Actions scheduling; the workflow cron is authoritative and uses UTC
 - Private deployment preserves cursors and summary history in encrypted storage; credentials are never cached
 - Opt-in tracked writes preserve identity and manual description edits, handle bank changes, and grow standard SUM-total tables into empty space
-- Read-only Sheets viewer, isolated onboarding helpers, and 86 offline tests
+- Read-only Sheets viewer, isolated onboarding helpers, and 91 offline tests
 
 **Potential future work:**
 - Historical reconciliation and broader tracking migration for existing bank rows

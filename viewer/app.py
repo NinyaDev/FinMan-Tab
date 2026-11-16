@@ -13,6 +13,7 @@ DEMO = Path(__file__).parent / 'demo.json'
 
 def create_app(provider=None):
     app = Flask(__name__)
+    app.config['TRUSTED_HOSTS'] = ['localhost', '127.0.0.1', '[::1]']
     provider = provider or (lambda: json.loads(DEMO.read_text()))
 
     @app.template_filter('money')

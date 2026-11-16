@@ -31,6 +31,9 @@ def create_app(client, output_dir, environment='sandbox', redirect_uri=None):
     if environment == 'production' and (not redirect_uri or urlparse(redirect_uri).scheme != 'https'):
         raise ValueError('Production onboarding requires an allowlisted HTTPS redirect URI')
     app = Flask(__name__)
+    app.config['TRUSTED_HOSTS'] = ['localhost', '127.0.0.1', '[::1]']
+    if redirect_uri:
+        app.config['TRUSTED_HOSTS'].append(urlparse(redirect_uri).hostname)
     app.secret_key = secrets.token_hex(32)
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax',
                       SESSION_COOKIE_SECURE=environment == 'production')
