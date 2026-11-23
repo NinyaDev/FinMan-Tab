@@ -83,7 +83,19 @@ class TrackedWriter:
             if state["date"] != str(tx.date) or state["prefix"] != prefix:
                 raise ReconciliationRequired("Transaction changed date or table")
             if state.get("removed"):
-                raise ReconciliationRequired("Removed transaction reappeared")
+                # Older removal records retain the pre-removal written values.
+                # Restore only our exact marker; never overwrite user edits.
+                current = self._read(metadata, state)
+                if current != ["[Removed by bank] " + state["written_description"], 0]:
+                    raise ReconciliationRequired("Reinstated transaction conflicts with edited removal row")
+                loc = metadata["location"]["dimensionRange"]
+                final_description = state["written_description"]
+                state.update(removed=False, source_amount=tx.amount, source_name=tx.name,
+                             written_amount=amount, kind=kind)
+                self._commit([
+                    self._cells(loc["sheetId"], loc["startIndex"], state["column"], final_description, amount),
+                    self._metadata_update(metadata, state)])
+                return True
             # Replayed additions never overwrite the user's Sheet edits.
             if state["source_amount"] == tx.amount and state["source_name"] == tx.name:
                 if state.get("kind", "unclassified") != kind:
@@ -94,7 +106,8 @@ class TrackedWriter:
             if current[1] != state["written_amount"]:
                 raise ReconciliationRequired("Bank update conflicts with edited amount")
             # Description edits survive subsequent bank updates.
-            final_description = description if current[0] == state["written_description"] else current[0]
+            final_description = (description if current[0] == state["written_description"]
+                                 and not state.get("description_locked") else current[0])
             loc = metadata["location"]["dimensionRange"]
             state.update(source_amount=tx.amount, source_name=tx.name,
                          written_amount=amount, written_description=final_description, kind=kind)
