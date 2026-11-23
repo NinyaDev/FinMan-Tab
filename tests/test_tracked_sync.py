@@ -154,6 +154,92 @@ class TrackedTests(unittest.TestCase):
         self.writer.remove('untracked')
         self.assertEqual(self.sheet.writes, 0)
 
+    def test_removed_credit_is_restored_in_place_with_original_description(self):
+        self.tx.amount = -21.34
+        self.write('My refund')
+        self.writer.remove('fake-tx')
+        self.assertTrue(self.write('New cleaner wording'))
+        self.assertEqual(self.sheet.cells[(7, 2, 2)], ['My refund', -21.34])
+        self.assertEqual(len(self.sheet.records), 1)
+        self.assertFalse(json.loads(self.sheet.records[0]['metadataValue'])['removed'])
+        self.assertFalse(self.write())
+        self.assertEqual(self.sheet.writes, 3)
+
+    def test_reinstatement_lost_response_replay_does_not_duplicate(self):
+        self.write()
+        self.writer.remove('fake-tx')
+        self.sheet.lose_response = True
+        with self.assertRaises(TimeoutError):
+            self.write()
+        self.assertFalse(self.write())
+        self.assertEqual(self.sheet.cells[(7, 2, 2)], ['Coffee', 12.5])
+        self.assertEqual(len(self.sheet.records), 1)
+        self.assertEqual(self.sheet.writes, 3)
+
+    def test_reinstatement_failure_before_write_is_retryable(self):
+        self.write()
+        self.writer.remove('fake-tx')
+        self.sheet.fail_before = True
+        with self.assertRaises(TimeoutError):
+            self.write()
+        self.assertTrue(json.loads(self.sheet.records[0]['metadataValue'])['removed'])
+        self.assertEqual(self.sheet.cells[(7, 2, 2)], ['[Removed by bank] Coffee', 0])
+        self.sheet.fail_before = False
+        self.assertTrue(self.write())
+
+    def test_reinstatement_preserves_manual_edits_to_removal_row(self):
+        self.write()
+        self.writer.remove('fake-tx')
+        for cells in (['My edited marker', 0], ['[Removed by bank] Coffee', 9], ['', '']):
+            with self.subTest(cells=cells):
+                self.sheet.cells[(7, 2, 2)] = cells[:]
+                with self.assertRaises(ReconciliationRequired):
+                    self.write()
+                self.assertEqual(self.sheet.cells[(7, 2, 2)], cells)
+                self.assertEqual(self.sheet.writes, 2)
+
+    def test_reinstatement_uses_latest_amount_and_can_be_removed_again(self):
+        self.write('Personal label')
+        self.writer.remove('fake-tx')
+        self.tx.amount = 15
+        self.tx.name = 'Corrected merchant'
+        self.write('New wording')
+        self.assertEqual(self.sheet.cells[(7, 2, 2)], ['Personal label', 15])
+        state = json.loads(self.sheet.records[0]['metadataValue'])
+        self.assertEqual(state['source_amount'], 15)
+        self.assertEqual(state['source_name'], 'Corrected merchant')
+        self.writer.remove('fake-tx')
+        self.assertEqual(self.sheet.cells[(7, 2, 2)], ['[Removed by bank] Personal label', 0])
+        self.assertTrue(self.write())
+        self.assertEqual(len(self.sheet.records), 1)
+
+    def test_reinstatement_date_or_table_change_still_requires_review(self):
+        self.write()
+        self.writer.remove('fake-tx')
+        self.tx.date = '2026-12-01'
+        with self.assertRaises(ReconciliationRequired):
+            self.write()
+        self.tx.date = '2026-11-07'
+        with self.assertRaises(ReconciliationRequired):
+            self.writer.upsert(self.tx, self.table, 'Coffee', 12.5, 'Other_')
+        self.assertEqual(self.sheet.writes, 2)
+
+    def test_reinstatement_allows_later_transactions_and_batch_replay(self):
+        self.write()
+        self.writer.remove('fake-tx')
+        later = Tx(transaction_id='later', date='2026-11-20', amount=15.31,
+                   name='Lunch', pending=False, pending_transaction_id=None)
+        def upsert(tx):
+            self.writer.upsert(tx, self.table, tx.name, tx.amount, 'Card_')
+        with patch('clients.tracked_writer.sheets._find_empty_data_row',
+                   side_effect=lambda *a: len(self.sheet.records) + 3):
+            apply_changes([later, self.tx], [], [], upsert, self.writer.remove)
+            apply_changes([later, self.tx], [], [], upsert, self.writer.remove)
+        self.assertEqual(self.sheet.cells[(7, 2, 2)], ['Coffee', 12.5])
+        self.assertEqual(self.sheet.cells[(7, 3, 2)], ['Lunch', 15.31])
+        self.assertEqual(len(self.sheet.records), 2)
+        self.assertEqual(self.sheet.writes, 4)
+
     def test_date_change_requires_reconciliation(self):
         self.write()
         self.tx.date = '2026-12-01'
@@ -345,7 +431,12 @@ class PipelineRecoveryTests(unittest.TestCase):
                 'maybe_send_monthly_summary': lambda *args: None,
             }.items():
                 stack.enter_context(patch.object(pipeline, name, value))
-            with self.assertRaises(SystemExit):
-                pipeline.main()
+            with self.assertLogs(pipeline.log, level='ERROR') as captured:
+                with self.assertRaises(SystemExit):
+                    pipeline.main()
+        output = '\n'.join(captured.output)
+        self.assertIn('Modified transaction predates row tracking', output)
+        self.assertNotIn('legacy-id', output)
+        self.assertNotIn('Historical row', output)
         writer.upsert.assert_not_called()
         save.assert_not_called()

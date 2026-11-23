@@ -243,6 +243,12 @@ Migrated rows can lock their existing descriptions so later bank updates preserv
 your wording. Tracking start dates define the historical window being migrated;
 older rows are not silently matched or rewritten.
 
+If Plaid removes a tracked transaction, its row retains the ID and a zero-value
+removal marker. If that same ID returns as posted, the writer restores the row
+with the latest amount and its previous description, in one atomic update.
+Retries do not append another row. An edited removal marker or a changed date/table
+still requires reconciliation; the log reports the reason without transaction data.
+
 ```yaml
 pipeline:
   start_date: "2026-05-01"   # one-time first-sync filter; ignored after cursor is set
@@ -343,7 +349,7 @@ python scripts/test_offline.py
 
 The runner uses a disposable copy with synthetic configuration, a dummy Gemini
 key, and blocked network connections. It avoids replacing your root config or
-advancing production cursors. The current suite has **97 tests**, covering routing,
+advancing production cursors. The current suite has **104 tests**, covering routing,
 summary behavior, tracked retry recovery, conflicts, ordering, table growth,
 classification, onboarding isolation, and viewer rendering/data reads.
 
@@ -364,7 +370,7 @@ prove real transaction processing.
 - Private GitHub Actions scheduling; the workflow cron is authoritative and uses UTC
 - Private deployment preserves cursors and summary history in encrypted storage; credentials are never cached
 - Opt-in tracked writes preserve identity and manual description edits, handle bank changes, and grow standard SUM-total tables into empty space
-- Read-only Sheets viewer, isolated onboarding helpers, and 97 offline tests
+- Read-only Sheets viewer, isolated onboarding helpers, and 104 offline tests
 
 **Potential future work:**
 - Historical reconciliation and broader tracking migration for existing bank rows

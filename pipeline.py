@@ -215,6 +215,11 @@ def main(only_banks=None, send_summary=True):
             else:
                 log.error("Plaid API error for %s (error_code=%s)", nickname, code)
             bank_errors.append((nickname, f"Plaid {code}"))
+        except ReconciliationRequired as e:
+            # These application-defined reasons contain no transaction values,
+            # identifiers, credentials, or upstream exception payloads.
+            log.error("Bank reconciliation required: %s", e)
+            bank_errors.append((nickname, type(e).__name__))
         except Exception as e:
             log.error("Bank sync failed (%s)", type(e).__name__)
             bank_errors.append((nickname, type(e).__name__))
